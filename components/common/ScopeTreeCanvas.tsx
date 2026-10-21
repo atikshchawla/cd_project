@@ -136,7 +136,7 @@ function ScopeTreeCanvasInner({ nodes, edges, label, heightClass }: ScopeTreeCan
       role="group"
       aria-label={label}
       className={cn(
-        'relative w-full overflow-hidden rounded-md border border-border bg-white',
+        'relative w-full overflow-hidden rounded-md border border-border bg-surface',
         heightClass ?? 'h-[24rem]',
       )}
     >

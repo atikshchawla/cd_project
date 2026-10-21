@@ -8,14 +8,21 @@ import { ExplanationPanel } from '@/components/common/ExplanationPanel';
 import { EditorPanel } from '@/components/editor/EditorPanel';
 import { ExamplePicker } from '@/components/editor/ExamplePicker';
 import { AboutDialog } from './AboutDialog';
-import { ProvenanceBanner } from './ProvenanceBanner';
-import { SettingsStrip } from './SettingsStrip';
+import { ResizablePanes } from './ResizablePanes';
 import { StageNavigator } from './StageNavigator';
 import { StageWorkspace } from './StageWorkspace';
-import { StepThroughBar } from './StepThroughBar';
+import { StatusBar } from './StatusBar';
+import { ThemeToggle } from './ThemeToggle';
+import { useThemeSync } from './theme';
 import { useWorkspaceStore } from '@/lib/store';
 import { sourceTooLarge } from '@/lib/status';
 
+/**
+ * IDE-style shell (SPEC target layout): compact top bar (48px) + stage
+ * stepper (56px) + two resizable panes + footer status bar (24px).
+ * At ≥1024px the page itself never scrolls — each pane scrolls internally.
+ * Below 1024px the panes stack and the page scrolls normally.
+ */
 export function AppShell() {
   const compileSource = useWorkspaceStore((state) => state.compileSource);
   const compileStatus = useWorkspaceStore((state) => state.compileStatus);
@@ -26,96 +33,103 @@ export function AppShell() {
   const startStepThrough = useWorkspaceStore((state) => state.startStepThrough);
   const isCompiling = compileStatus === 'compiling';
   const tooLarge = sourceTooLarge(source);
+  useThemeSync();
 
   return (
     <TooltipProvider>
-      <div className="flex min-h-screen flex-col bg-muted/20">
-        <header className="border-b border-border bg-background">
-          <div className="mx-auto flex w-full max-w-[1600px] flex-wrap items-center gap-3 px-4 py-3">
-            <div className="mr-auto min-w-0">
-              <h1 className="text-base font-semibold leading-6">Mini-C Compiler Visualizer</h1>
-              <p className="text-xs text-muted-foreground">
-                Source → Tokens → AST → Semantic analysis → IR → Assembly → Execution
-              </p>
-            </div>
+      <div className="flex min-h-dvh flex-col bg-background lg:h-dvh lg:min-h-0 lg:overflow-hidden">
+        <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
+          <h1 className="mr-1 shrink-0 text-sm font-semibold leading-none">
+            Mini-C Compiler Visualizer
+          </h1>
 
+          <div className="min-w-0 flex-1">
             <ExamplePicker />
-
-            <Button
-              type="button"
-              size="sm"
-              onClick={compileSource}
-              disabled={isCompiling || tooLarge}
-              aria-keyshortcuts="Control+Enter Meta+Enter"
-              title={
-                tooLarge
-                  ? 'The program is too large to compile in this visualizer'
-                  : 'Compile (Ctrl/Cmd + Enter)'
-              }
-            >
-              <Play aria-hidden="true" />
-              {isCompiling ? 'Compiling…' : 'Compile'}
-            </Button>
-
-            <Button
-              type="button"
-              size="sm"
-              variant={stepMode ? 'default' : 'secondary'}
-              onClick={() => startStepThrough()}
-              disabled={isCompiling || tooLarge}
-              title="Compile one stage at a time and watch each artifact appear"
-            >
-              <ListStart aria-hidden="true" />
-              Step through
-            </Button>
-
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => setAboutOpen(true)}
-            >
-              <CircleHelp aria-hidden="true" />
-              About
-            </Button>
           </div>
+
+          <Button
+            type="button"
+            size="sm"
+            className="h-8"
+            onClick={compileSource}
+            disabled={isCompiling || tooLarge}
+            aria-keyshortcuts="Control+Enter Meta+Enter"
+            title={
+              tooLarge
+                ? 'The program is too large to compile in this visualizer'
+                : 'Compile (Ctrl/Cmd + Enter)'
+            }
+          >
+            <Play aria-hidden="true" />
+            {isCompiling ? 'Compiling…' : 'Compile'}
+          </Button>
+
+          <Button
+            type="button"
+            size="sm"
+            variant={stepMode ? 'default' : 'secondary'}
+            className="h-8"
+            onClick={() => startStepThrough()}
+            disabled={isCompiling || tooLarge}
+            title="Compile one stage at a time and watch each artifact appear"
+          >
+            <ListStart aria-hidden="true" />
+            Step through
+          </Button>
+
+          <ThemeToggle />
+
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-8"
+            onClick={() => setAboutOpen(true)}
+          >
+            <CircleHelp aria-hidden="true" />
+            About
+          </Button>
         </header>
 
-        <div className="mx-auto flex w-full max-w-[1600px] flex-1 flex-col gap-3 px-4 py-4">
-          <StepThroughBar />
-          <StageNavigator />
-          <SettingsStrip />
-          <ProvenanceBanner />
+        <StageNavigator />
 
-          {stale ? (
-            <div
-              role="status"
-              className="flex flex-wrap items-center gap-2 rounded-md border border-amber-700/30 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-950"
+        {stale ? (
+          <div
+            role="status"
+            className="flex shrink-0 items-center gap-2 border-b border-warn/40 bg-warn/10 px-3 py-1.5 text-xs leading-5"
+          >
+            <TriangleAlert aria-hidden="true" className="size-3.5 shrink-0 text-warn" />
+            <p className="min-w-0 flex-1">{STALE_BANNER}</p>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={compileSource}
+              className="h-7 shrink-0"
             >
-              <TriangleAlert aria-hidden="true" className="size-4 shrink-0" />
-              <p className="min-w-0 flex-1">{STALE_BANNER}</p>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={compileSource}
-                className="border-amber-700/30 bg-white/60 text-amber-950 hover:bg-white"
-              >
-                Recompile
-              </Button>
-            </div>
-          ) : null}
+              Recompile
+            </Button>
+          </div>
+        ) : null}
 
-          <main className="grid min-w-0 grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
-            <EditorPanel />
-            <div className="flex min-w-0 flex-col gap-4">
-              <StageWorkspace />
-              <ExplanationPanel />
-            </div>
-          </main>
-        </div>
+        <main className="min-h-0 flex-1">
+          <ResizablePanes
+            left={
+              <div className="flex h-full min-h-0 flex-col overflow-y-auto p-3">
+                <EditorPanel />
+              </div>
+            }
+            right={
+              <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3">
+                <StageWorkspace />
+                <ExplanationPanel />
+              </div>
+            }
+          />
+        </main>
 
         <AboutDialog />
+        <StatusBar />
       </div>
     </TooltipProvider>
   );

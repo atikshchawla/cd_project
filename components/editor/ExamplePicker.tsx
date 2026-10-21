@@ -22,14 +22,17 @@ export function ExamplePicker() {
   const errorExamples = EXAMPLES.filter((example) => example.category === 'error');
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="flex items-center gap-2">
       <Select
         value={exampleId ?? ''}
         onValueChange={(value) => {
           if (value !== '') loadExample(value);
         }}
       >
-        <SelectTrigger className="w-full min-w-[12rem] sm:w-[15rem]" aria-label="Choose an example">
+        <SelectTrigger
+          className="h-8 w-[13rem] lg:w-[15rem]"
+          aria-label="Choose an example"
+        >
           <SelectValue placeholder="Choose an example…" />
         </SelectTrigger>
         <SelectContent>
@@ -60,6 +63,7 @@ export function ExamplePicker() {
         type="button"
         variant="outline"
         size="sm"
+        className="h-8 shrink-0"
         onClick={resetExample}
         disabled={exampleId === null}
         title="Restore the selected example's original code"

@@ -43,7 +43,7 @@ function ExampleGuidance() {
       <div className="flex flex-wrap items-center gap-2">
         <BookOpen aria-hidden="true" className="size-4 text-sky-900" />
         <h2 className="text-sm font-semibold text-sky-950">{example.title}</h2>
-        <Badge variant="outline" className="border-sky-700/30 bg-white/60 text-sky-900">
+        <Badge variant="outline" className="border-sky-700/30 bg-surface/60 text-sky-900">
           {example.category === 'learn' ? 'Learn' : 'Error'}
         </Badge>
       </div>

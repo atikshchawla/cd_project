@@ -114,7 +114,7 @@ function GraphCanvasInner({ nodes, edges, label }: GraphCanvasProps) {
     <div
       role="group"
       aria-label={label}
-      className="relative h-[24rem] w-full overflow-hidden rounded-md border border-border bg-white"
+      className="relative h-[24rem] w-full overflow-hidden rounded-md border border-border bg-surface"
     >
       <ReactFlow
         nodes={nodes}

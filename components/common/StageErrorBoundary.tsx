@@ -53,7 +53,7 @@ export class StageErrorBoundary extends Component<
           type="button"
           size="sm"
           variant="outline"
-          className="border-red-700/30 bg-white/60 text-red-950 hover:bg-white"
+          className="border-red-700/30 bg-surface/60 text-red-950 hover:bg-surface"
           onClick={() => window.location.reload()}
         >
           {STAGE_CRASH_RELOAD}

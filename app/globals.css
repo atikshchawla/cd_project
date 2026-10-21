@@ -1,32 +1,119 @@
 @import "tailwindcss";
 
-/* Pastel workspace palette: soft lavender paper, plum ink, mint accents.
-   All values stay light enough for 4.5:1 text contrast. */
+/* --------------------------------------------------------------------------
+   Mini-C visualizer theme.
+
+   Two themes toggled by `.dark` on <html> (an inline script in layout.tsx
+   sets it before first paint). Tokens follow an IDE identity: deep navy
+   surfaces in dark, cool paper in light, one teal accent, and a hue per
+   compiler stage used for the stepper, header underline and badges.
+
+   Spec tokens (--bg, --surface, --text, --text-muted, --accent, stage hues,
+   highlight tokens) never collide with the legacy shadcn aliases
+   (--background, --muted, --muted-foreground, …) that components already use.
+
+   Contrast (both themes): --text on --bg ~15:1; --text-muted on --surface
+   ~6:1; stage -700 on white >= 4.5:1; stage -400 on --bg >= 7:1.
+   -------------------------------------------------------------------------- */
+
 :root {
   color-scheme: light;
-  --background: oklch(0.985 0.008 300);
-  --foreground: oklch(0.28 0.035 300);
-  --card: oklch(0.995 0.004 300);
-  --card-foreground: oklch(0.28 0.035 300);
-  --popover: oklch(0.995 0.004 300);
-  --popover-foreground: oklch(0.28 0.035 300);
-  --primary: oklch(0.78 0.07 300);
-  --primary-foreground: oklch(0.25 0.05 300);
-  --secondary: oklch(0.94 0.02 300);
-  --secondary-foreground: oklch(0.28 0.04 300);
-  --muted: oklch(0.955 0.012 300);
-  --muted-foreground: oklch(0.46 0.025 300);
-  --accent: oklch(0.93 0.03 160);
-  --accent-foreground: oklch(0.28 0.04 160);
-  --destructive: oklch(0.6 0.17 25);
-  --border: oklch(0.88 0.02 300);
-  --input: oklch(0.88 0.02 300);
-  --ring: oklch(0.62 0.1 300);
-  --radius: 0.5rem;
 
-  /* Primary-selection tint defaults (overridden per selection kind below). */
-  --sel-bg: oklch(0.93 0.04 300);
-  --sel-border: oklch(0.55 0.15 300);
+  /* Spec tokens (light). */
+  --bg: #f6f7fa;
+  --surface: #ffffff;
+  --surface-2: #eef1f6;
+  --border: #dde2ec;
+  --text: #0f172a;
+  --text-muted: #55627a;
+  --accent: #0f766e;
+  --accent-fg: #ffffff;
+  --accent-wash: #dff3f0;
+  --danger: #b91c1c;
+  --warn: #b45309;
+  --ok: #047857;
+
+  /* Stage hues: -700 in light for text/icons; 12% tint for chip fills. */
+  --stage-source: #334155;
+  --stage-tokens: #0369a1;
+  --stage-ast: #6d28d9;
+  --stage-semantic: #047857;
+  --stage-ir: #b45309;
+  --stage-assembly: #c2410c;
+  --stage-run: #be185d;
+
+  /* Cross-stage highlight tokens (SPEC 7.3): amber primary, sky related. */
+  --hl-primary-bg: rgb(251 191 36 / 0.28);
+  --hl-primary-outline: #b45309;
+  --hl-related-bg: rgb(56 189 248 / 0.16);
+  --hl-related-outline: #0369a1;
+
+  /* Legacy shadcn aliases (components keep these Tailwind names). */
+  --background: var(--bg);
+  --foreground: var(--text);
+  --card: var(--surface);
+  --card-foreground: var(--text);
+  --popover: var(--surface);
+  --popover-foreground: var(--text);
+  --primary: var(--accent);
+  --primary-foreground: var(--accent-fg);
+  --secondary: var(--surface-2);
+  --secondary-foreground: var(--text);
+  --muted: var(--surface-2);
+  --muted-foreground: var(--text-muted);
+  --destructive: var(--danger);
+  --input: var(--border);
+  --ring: var(--accent);
+  --radius: 8px;
+}
+
+.dark {
+  color-scheme: dark;
+
+  /* Spec tokens (dark). */
+  --bg: #0b0f17;
+  --surface: #111827;
+  --surface-2: #172033;
+  --border: #243049;
+  --text: #e6eaf2;
+  --text-muted: #93a0b8;
+  --accent: #5eead4;
+  --accent-fg: #04201c;
+  --accent-wash: #12302c;
+  --danger: #f87171;
+  --warn: #fbbf24;
+  --ok: #34d399;
+
+  /* Stage hues: -400 in dark for text/icons. */
+  --stage-source: #94a3b8;
+  --stage-tokens: #38bdf8;
+  --stage-ast: #a78bfa;
+  --stage-semantic: #34d399;
+  --stage-ir: #fbbf24;
+  --stage-assembly: #fb923c;
+  --stage-run: #f472b6;
+
+  --hl-primary-bg: rgb(251 191 36 / 0.28);
+  --hl-primary-outline: #fbbf24;
+  --hl-related-bg: rgb(56 189 248 / 0.16);
+  --hl-related-outline: #38bdf8;
+
+  /* Legacy shadcn aliases. */
+  --background: var(--bg);
+  --foreground: var(--text);
+  --card: var(--surface);
+  --card-foreground: var(--text);
+  --popover: var(--surface);
+  --popover-foreground: var(--text);
+  --primary: var(--accent);
+  --primary-foreground: var(--accent-fg);
+  --secondary: var(--surface-2);
+  --secondary-foreground: var(--text);
+  --muted: var(--surface-2);
+  --muted-foreground: var(--text-muted);
+  --destructive: var(--danger);
+  --input: var(--border);
+  --ring: var(--accent);
 }
 
 @theme inline {
@@ -42,38 +129,56 @@
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
+  /* Hover wash (teal ~10%), not the full accent — shadcn hovers stay subtle. */
+  --color-accent: var(--accent-wash);
+  --color-accent-foreground: var(--text);
   --color-destructive: var(--destructive);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
 
-  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-danger: var(--danger);
+  --color-warn: var(--warn);
+  --color-ok: var(--ok);
 
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  --color-stage-source: var(--stage-source);
+  --color-stage-tokens: var(--stage-tokens);
+  --color-stage-ast: var(--stage-ast);
+  --color-stage-semantic: var(--stage-semantic);
+  --color-stage-ir: var(--stage-ir);
+  --color-stage-assembly: var(--stage-assembly);
+  --color-stage-run: var(--stage-run);
+
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* 8px grid: base 8, chips/inputs 6. */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
 }
 
 @layer base {
   * {
-    border-color: var(--color-border);
+    border-color: var(--border);
   }
 
   html {
     font-family: var(--font-sans);
+    /* IDE density: 14px base. */
+    font-size: 14px;
   }
 
   body {
-    background-color: var(--color-background);
-    color: var(--color-foreground);
+    background-color: var(--background);
+    color: var(--foreground);
   }
 
   :focus-visible {
-    outline: 2px solid var(--color-ring);
+    outline: 2px solid var(--ring);
     outline-offset: 2px;
   }
 }
@@ -90,82 +195,40 @@
 }
 
 /* --------------------------------------------------------------------------
-   Selection highlights.
+   Cross-stage selection highlights (SPEC 7.3).
 
-   The primary tint depends on which part is selected: the tint-* classes set
-   --sel-bg / --sel-border, which .sel-primary and .hl-primary consume. That
-   way the editor text, table rows and graph nodes all agree: tokens peach,
-   syntax lavender, symbols mint, IR sky, assembly rose.
-
-   Never colour alone: primary ranges also have a 2px outline and bold text;
-   related ranges keep a dashed underline.
+   Unified tokens: the selected item gets an amber wash + 2px outline + bold;
+   related items get a sky wash + dashed outline/underline. The tint-* class
+   names still appear in markup but are no longer needed — every stage shares
+   these tokens so editor text, table rows and graph nodes always agree.
    -------------------------------------------------------------------------- */
 
-.tint-source,
-.tint-diagnostic {
-  --sel-bg: oklch(0.94 0.03 300);
-  --sel-border: oklch(0.5 0.13 300);
-}
-
-.tint-lex {
-  --sel-bg: oklch(0.95 0.035 70);
-  --sel-border: oklch(0.6 0.13 55);
-}
-
-.tint-parse {
-  --sel-bg: oklch(0.93 0.045 295);
-  --sel-border: oklch(0.55 0.16 295);
-}
-
-.tint-sema {
-  --sel-bg: oklch(0.94 0.04 160);
-  --sel-border: oklch(0.55 0.1 165);
-}
-
-.tint-ir {
-  --sel-bg: oklch(0.94 0.035 240);
-  --sel-border: oklch(0.55 0.12 245);
-}
-
-.tint-asm {
-  --sel-bg: oklch(0.95 0.03 10);
-  --sel-border: oklch(0.58 0.14 15);
-}
-
-.tint-sim {
-  --sel-bg: oklch(0.95 0.04 95);
-  --sel-border: oklch(0.6 0.12 90);
-}
-
-/* Monaco cross-stage decoration classes (the tint class rides along). */
 .hl-primary {
-  background-color: var(--sel-bg, oklch(0.93 0.04 300));
-  outline: 2px solid var(--sel-border, oklch(0.55 0.15 300));
+  background-color: var(--hl-primary-bg);
+  outline: 2px solid var(--hl-primary-outline);
   outline-offset: -1px;
   border-radius: 2px;
   font-weight: 600;
 }
 
 .hl-related {
-  background-color: oklch(0.93 0.04 160);
-  border-bottom: 1px dashed oklch(0.5 0.09 165);
-  text-decoration: underline dashed oklch(0.5 0.09 165);
+  background-color: var(--hl-related-bg);
+  border-bottom: 1px dashed var(--hl-related-outline);
+  text-decoration: underline dashed var(--hl-related-outline);
   text-underline-offset: 2px;
 }
 
-/* Row/node primary selection: soft pastel fill + strong outline + bold. */
 .sel-primary {
-  background-color: var(--sel-bg, oklch(0.93 0.04 300));
+  background-color: var(--hl-primary-bg);
   font-weight: 600;
-  outline: 2px solid var(--sel-border, oklch(0.55 0.15 300));
+  outline: 2px solid var(--hl-primary-outline);
   outline-offset: -2px;
   border-radius: 4px;
-  box-shadow: inset 3px 0 0 0 var(--sel-border, oklch(0.55 0.15 300));
+  box-shadow: inset 3px 0 0 0 var(--hl-primary-outline);
 }
 
-/* Row/node related items: mint wash + dashed underline. */
 .sel-related {
-  background-color: oklch(0.94 0.04 160);
-  text-decoration: underline dashed oklch(0.5 0.09 165);
+  background-color: var(--hl-related-bg);
+  text-decoration: underline dashed var(--hl-related-outline);
   text-underline-offset: 2px;
 }

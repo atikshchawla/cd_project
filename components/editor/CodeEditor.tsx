@@ -8,10 +8,74 @@ import {
 } from '@/lib/highlight';
 import type { Origin } from '@/lib/store';
 import type { Diagnostic, Range, Token } from '@/lib/compiler/types';
+import { useThemeStore } from '@/components/shell/theme';
 
 type EditorInstance = Parameters<OnMount>[0];
 type MonacoApi = Parameters<OnMount>[1];
 type DecorationsCollection = ReturnType<EditorInstance['createDecorationsCollection']>;
+
+/** The next/font family name is hashed; read it from the CSS variable. */
+function resolveMonoFamily(): string {
+  if (typeof window === 'undefined') {
+    return "'JetBrains Mono', ui-monospace, monospace";
+  }
+  const loaded = getComputedStyle(document.documentElement)
+    .getPropertyValue('--font-jetbrains-mono')
+    .trim();
+  return loaded.length > 0
+    ? `${loaded}, ui-monospace, monospace`
+    : "'JetBrains Mono', ui-monospace, monospace";
+}
+
+/** Define both app themes once per Monaco instance (before the editor mounts). */
+function defineMiniCTopics(monaco: MonacoApi): void {
+  monaco.editor.defineTheme('minic-dark', {
+    base: 'vs-dark',
+    inherit: true,
+    rules: [
+      { token: 'keyword', foreground: '5EEAD4' },
+      { token: 'number', foreground: 'FBBF24' },
+      { token: 'string', foreground: '34D399' },
+      { token: 'comment', foreground: '93A0B8', fontStyle: 'italic' },
+      { token: 'identifier', foreground: 'E6EAF2' },
+      { token: 'delimiter', foreground: '93A0B8' },
+    ],
+    colors: {
+      // --surface / --surface-2
+      'editor.background': '#111827',
+      'editor.lineHighlightBackground': '#172033',
+      // --accent at 25%
+      'editor.selectionBackground': '#5EEAD440',
+      'editorCursor.foreground': '#5EEAD4',
+      'editorLineNumber.foreground': '#93A0B8',
+      'editorLineNumber.activeForeground': '#E6EAF2',
+      'editorIndentGuide.background1': '#243049',
+      'editorWhitespace.foreground': '#243049',
+    },
+  });
+  monaco.editor.defineTheme('minic-light', {
+    base: 'vs',
+    inherit: true,
+    rules: [
+      { token: 'keyword', foreground: '0F766E' },
+      { token: 'number', foreground: 'B45309' },
+      { token: 'string', foreground: '047857' },
+      { token: 'comment', foreground: '55627A', fontStyle: 'italic' },
+      { token: 'identifier', foreground: '0F172A' },
+      { token: 'delimiter', foreground: '55627A' },
+    ],
+    colors: {
+      'editor.background': '#FFFFFF',
+      'editor.lineHighlightBackground': '#EEF1F6',
+      'editor.selectionBackground': '#0F766E40',
+      'editorCursor.foreground': '#0F766E',
+      'editorLineNumber.foreground': '#55627A',
+      'editorLineNumber.activeForeground': '#0F172A',
+      'editorIndentGuide.background1': '#DDE2EC',
+      'editorWhitespace.foreground': '#DDE2EC',
+    },
+  });
+}
 
 export interface CodeEditorProps {
   value: string;
@@ -55,6 +119,7 @@ export function CodeEditor({
   const onSourceSelectionRef = useRef(onSourceSelection);
   const onChangeRef = useRef(onChange);
   const [isReady, setIsReady] = useState(false);
+  const resolvedTheme = useThemeStore((state) => state.resolved);
 
   useEffect(() => {
     onCompileRef.current = onCompile;
@@ -106,6 +171,10 @@ export function CodeEditor({
     // The compiler and every stored range assume LF line endings.
     model?.setEOL(monaco.editor.EndOfLineSequence.LF);
     decorationsRef.current = editor.createDecorationsCollection([]);
+
+    // Monaco renders on a canvas and cannot see Tailwind classes: give it the
+    // real (hashed) JetBrains Mono family that next/font loaded.
+    editor.updateOptions({ fontFamily: resolveMonoFamily() });
 
     // Monaco owns Ctrl/Cmd+Enter while the editor is focused, so its default
     // binding cannot swallow the compile shortcut.
@@ -233,11 +302,12 @@ export function CodeEditor({
   }, [diagnostics, isReady, stale, toMonacoRange]);
 
   return (
-    <div className="h-[420px] w-full overflow-hidden rounded-md border border-border bg-white">
+    <div className="h-[420px] w-full overflow-hidden rounded-md border border-border bg-surface">
       <Editor
         height="100%"
         language="c"
-        theme="vs"
+        theme={resolvedTheme === 'dark' ? 'minic-dark' : 'minic-light'}
+        beforeMount={defineMiniCTopics}
         value={value}
         onChange={(nextValue) => onChange(nextValue ?? '')}
         onMount={handleMount}
@@ -249,12 +319,13 @@ export function CodeEditor({
         options={{
           ariaLabel: 'Mini-C source editor',
           automaticLayout: true,
-          fontFamily: 'var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace',
-          fontSize: 14,
-          lineHeight: 22,
+          fontFamily: "'JetBrains Mono', ui-monospace, SFMono-Regular, monospace",
+          fontLigatures: false,
+          fontSize: 13,
+          lineHeight: 20,
           lineNumbers: 'on',
           minimap: { enabled: false },
-          padding: { top: 12, bottom: 12 },
+          padding: { top: 8, bottom: 8 },
           renderLineHighlight: 'line',
           scrollBeyondLastLine: false,
           tabSize: 2,
