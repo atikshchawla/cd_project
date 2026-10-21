@@ -13,6 +13,7 @@ const KIND_CLASSES: Record<ProvenanceKind, string> = {
   generated: 'border-emerald-700/30 bg-emerald-50 text-emerald-900',
   derived: 'border-sky-700/30 bg-sky-50 text-sky-900',
   illustrative: 'border-amber-700/30 bg-amber-50 text-amber-900',
+  simulated: 'border-violet-700/30 bg-violet-50 text-violet-900',
 };
 
 export function ProvenanceBadge({

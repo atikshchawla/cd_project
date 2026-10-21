@@ -1,5 +1,5 @@
 export type Range = { start: number; end: number }; // char offsets, [start, end)
-export type Stage = 'source' | 'lex' | 'parse' | 'sema' | 'ir' | 'asm';
+export type Stage = 'source' | 'lex' | 'parse' | 'sema' | 'ir' | 'asm' | 'sim';
 
 export interface Diagnostic {
   id: number;
@@ -168,6 +168,21 @@ export interface IRLine {
   funcName?: string;
 }
 
+export type AsmLineKind = 'directive' | 'label' | 'instruction' | 'comment';
+
+/** One line of illustrative x86-64 assembly text lowered from the IR. */
+export interface AsmLine {
+  lineNo: number;
+  text: string;
+  kind: AsmLineKind;
+  irInstrId?: number; // the IR instruction this line lowers (exact mapping)
+  funcName?: string;
+}
+
+export interface AsmModule {
+  lines: AsmLine[];
+}
+
 export interface CompileResult {
   sourceHash: string;
   source: string; // source = normalised (LF only)
@@ -176,7 +191,7 @@ export interface CompileResult {
   symbols: { symbols: Symbol[]; scopes: Scope[] } | null;
   diagnostics: Diagnostic[];
   ir: { module: IRModule; lines: IRLine[] } | null;
-  asm: null; // reserved for a later milestone
+  asm: AsmModule | null; // naive x86-64 text lowered from the IR
   completed: Record<Stage, 'ok' | 'warnings' | 'failed' | 'blocked'>;
   meta: { compilerVersion: string; target: string; flags: string[]; elapsedMs: number };
 }

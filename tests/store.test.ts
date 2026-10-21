@@ -72,9 +72,69 @@ describe('workspace store', () => {
     });
   });
 
-  it('does not activate the deferred assembly stage', () => {
+  it('activates the assembly and execution stages', () => {
     useWorkspaceStore.getState().setActiveStage('asm');
-    expect(useWorkspaceStore.getState().activeStage).toBe('source');
+    expect(useWorkspaceStore.getState().activeStage).toBe('asm');
+
+    useWorkspaceStore.getState().setActiveStage('sim');
+    expect(useWorkspaceStore.getState().activeStage).toBe('sim');
+  });
+
+  it('runs the pipeline one stage at a time in step-through mode', () => {
+    useWorkspaceStore.getState().setSource('int main() { return 42; }');
+    useWorkspaceStore.getState().startStepThrough();
+
+    expect(useWorkspaceStore.getState().stepMode).toBe(true);
+    expect(useWorkspaceStore.getState().stepReached).toBeNull();
+    expect(useWorkspaceStore.getState().result).toBeNull();
+
+    useWorkspaceStore.getState().advanceStep();
+    expect(useWorkspaceStore.getState().stepReached).toBe('lex');
+    expect(useWorkspaceStore.getState().activeStage).toBe('lex');
+    expect(useWorkspaceStore.getState().result?.tokens.length).toBeGreaterThan(0);
+    expect(useWorkspaceStore.getState().result?.ast).toBeNull();
+
+    useWorkspaceStore.getState().advanceStep();
+    expect(useWorkspaceStore.getState().stepReached).toBe('parse');
+    expect(useWorkspaceStore.getState().result?.ast).not.toBeNull();
+    expect(useWorkspaceStore.getState().result?.ir).toBeNull();
+
+    useWorkspaceStore.getState().runUntil('asm');
+    expect(useWorkspaceStore.getState().stepReached).toBe('asm');
+    expect(useWorkspaceStore.getState().activeStage).toBe('asm');
+    expect(useWorkspaceStore.getState().result?.asm).not.toBeNull();
+    expect(useWorkspaceStore.getState().result?.completed.sim).toBe('ok');
+
+    useWorkspaceStore.getState().stopStepThrough();
+    expect(useWorkspaceStore.getState().stepMode).toBe(false);
+    expect(useWorkspaceStore.getState().stepReached).toBeNull();
+  });
+
+  it('advancing past the last stage is a no-op', () => {
+    useWorkspaceStore.getState().setSource('int main() { return 1; }');
+    useWorkspaceStore.getState().startStepThrough();
+    useWorkspaceStore.getState().runUntil('asm');
+
+    const before = useWorkspaceStore.getState().result;
+    useWorkspaceStore.getState().advanceStep();
+
+    expect(useWorkspaceStore.getState().stepReached).toBe('asm');
+    expect(useWorkspaceStore.getState().result).toBe(before);
+  });
+
+  it('exits step-through mode on a full compile', () => {
+    vi.useFakeTimers();
+    useWorkspaceStore.getState().setSource('int main() { return 0; }');
+    useWorkspaceStore.getState().startStepThrough();
+    useWorkspaceStore.getState().advanceStep();
+
+    useWorkspaceStore.getState().compileSource();
+    vi.runAllTimers();
+
+    const state = useWorkspaceStore.getState();
+    expect(state.stepMode).toBe(false);
+    expect(state.stepReached).toBeNull();
+    expect(state.result?.completed).toMatchObject({ asm: 'ok', sim: 'ok' });
   });
 
   it('shows a compiling state, then stores the stub result', () => {

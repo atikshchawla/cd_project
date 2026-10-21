@@ -23,6 +23,8 @@ export interface CodeEditorProps {
   diagnostics?: Diagnostic[];
   selectionOrigin?: Origin;
   stale?: boolean;
+  /** Pastel tint class for the primary highlight, from the selected part. */
+  tintClass?: string;
 }
 
 function rangeKey(range: Range): string {
@@ -42,6 +44,7 @@ export function CodeEditor({
   diagnostics = EMPTY_DIAGNOSTICS,
   selectionOrigin = 'stage',
   stale = false,
+  tintClass = '',
 }: CodeEditorProps) {
   const editorRef = useRef<EditorInstance | null>(null);
   const monacoRef = useRef<MonacoApi | null>(null);
@@ -150,6 +153,7 @@ export function CodeEditor({
     const activeHighlights = highlights ?? createEmptyHighlights();
     const decorations: Array<Parameters<DecorationsCollection['set']>[0][number]> = [];
     const primaryKeys = new Set<string>();
+    const primaryClass = tintClass.length > 0 ? `hl-primary ${tintClass}` : 'hl-primary';
 
     for (const range of activeHighlights.sourceRanges) {
       const monacoRange = toMonacoRange(range);
@@ -157,7 +161,7 @@ export function CodeEditor({
       primaryKeys.add(rangeKey(range));
       decorations.push({
         range: monacoRange,
-        options: { inlineClassName: 'hl-primary' },
+        options: { inlineClassName: primaryClass },
       });
     }
 
@@ -173,7 +177,7 @@ export function CodeEditor({
     }
 
     collection.set(decorations);
-  }, [isReady, highlights, tokens, stale, selectionOrigin, toMonacoRange]);
+  }, [isReady, highlights, tokens, stale, selectionOrigin, toMonacoRange, tintClass]);
 
   // Reveal external selections, but never react to the editor's own caret.
   useEffect(() => {

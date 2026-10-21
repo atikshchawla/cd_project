@@ -15,6 +15,7 @@ export function ProvenanceBanner() {
         <ProvenanceBadge kind="generated" />
         <ProvenanceBadge kind="derived" />
         <ProvenanceBadge kind="illustrative" />
+        <ProvenanceBadge kind="simulated" />
       </div>
     </div>
   );

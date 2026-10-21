@@ -1,6 +1,46 @@
 import type { Ast, AstNode, CompileResult, Range, Stage } from '@/lib/compiler/types';
 import type { Selection } from '@/lib/store';
 
+export type SelectionTint = 'source' | 'lex' | 'parse' | 'sema' | 'ir' | 'asm' | 'diagnostic';
+
+/**
+ * Which pastel tint to paint the primary highlight with, depending on the
+ * selected part: tokens tint peach, syntax lavender, symbols mint, IR sky,
+ * assembly rose, diagnostics by their reporting stage.
+ */
+export function selectionTint(selection: Selection, result: CompileResult | null): SelectionTint {
+  switch (selection.kind) {
+    case 'token':
+      return 'lex';
+    case 'ast':
+      return 'parse';
+    case 'symbol':
+      return 'sema';
+    case 'ir':
+      return 'ir';
+    case 'asm':
+      return 'asm';
+    case 'diagnostic': {
+      const diagnostic = result?.diagnostics.find(
+        (candidate) => candidate.id === selection.diagnosticId,
+      );
+      if (diagnostic === undefined) return 'diagnostic';
+      switch (diagnostic.stage) {
+        case 'lex':
+          return 'lex';
+        case 'parse':
+          return 'parse';
+        case 'sema':
+          return 'sema';
+        default:
+          return 'diagnostic';
+      }
+    }
+    default:
+      return 'source';
+  }
+}
+
 export interface Highlights {
   primary: { stage: Stage; id: number } | null;
   sourceRanges: Range[];
@@ -285,6 +325,47 @@ export function computeHighlights(
           .filter((candidate) => candidate.astNodeId === instr.astNodeId)
           .map((candidate) => candidate.id),
       );
+
+      const node = instr.astNodeId !== undefined ? result.ast?.nodes[instr.astNodeId] : undefined;
+      if (node === undefined) {
+        highlights.unavailable =
+          'This is compiler scaffolding; it does not correspond to a source expression.';
+        return highlights;
+      }
+      highlights.astNodeIds = new Set([node.id]);
+      highlights.sourceRanges = [node.range];
+      highlights.tokenIds = new Set(tokensFullyInside(result, node.range));
+      return highlights;
+    }
+
+    case 'asm': {
+      if (result.asm === null) {
+        highlights.unavailable =
+          'There is no generated assembly for this program, so this selection cannot be mapped.';
+        return highlights;
+      }
+      const line = result.asm.lines.find((candidate) => candidate.lineNo === selection.lineId);
+      if (line === undefined) {
+        highlights.unavailable =
+          'This assembly line is not part of the current compile. Recompile and select it again.';
+        return highlights;
+      }
+
+      highlights.primary = { stage: 'asm', id: line.lineNo };
+      if (line.irInstrId === undefined || result.ir === null) {
+        highlights.unavailable =
+          'This line is a label, directive or prologue instruction. It is scaffolding without a single IR origin.';
+        return highlights;
+      }
+
+      const instr = result.ir.module.instrs[line.irInstrId];
+      if (instr === undefined) return highlights;
+      highlights.irInstrIds = new Set(
+        Object.values(result.ir.module.instrs)
+          .filter((candidate) => candidate.astNodeId === instr.astNodeId && instr.astNodeId !== undefined)
+          .map((candidate) => candidate.id),
+      );
+      highlights.irInstrIds.add(instr.id);
 
       const node = instr.astNodeId !== undefined ? result.ast?.nodes[instr.astNodeId] : undefined;
       if (node === undefined) {

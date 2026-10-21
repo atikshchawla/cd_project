@@ -1,7 +1,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { CircleSlash, FileCode2, Loader } from 'lucide-react';
+import { CircleSlash, FileCode2, Loader, Play } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { StageErrorBoundary } from '@/components/common/StageErrorBoundary';
@@ -12,13 +12,20 @@ import {
   COMPILE_IN_PROGRESS_DETAIL,
   EMPTY_WORKSPACE,
   STAGE_EXPLANATIONS,
+  STEP_NOT_RUN_BODY,
+  STEP_NOT_RUN_RUN_NEXT,
+  STEP_NOT_RUN_RUN_THIS,
+  STEP_NOT_RUN_TITLE,
   blockedStageMessage,
 } from '@/content/explanations';
+import { PIPELINE_STAGES } from '@/lib/compiler';
 import { useWorkspaceStore } from '@/lib/store';
 import { deriveStageStatus, type StageStatus } from '@/lib/status';
 import type { Diagnostic, Stage } from '@/lib/compiler/types';
 import { cn } from '@/lib/utils';
 import { TokenExplorer } from '@/components/stages/TokenExplorer';
+
+const ALL_STAGES: Stage[] = ['source', 'lex', 'parse', 'sema', 'ir', 'asm', 'sim'];
 
 const AstExplorer = dynamic(() => import('@/components/stages/AstExplorer'), {
   ssr: false,
@@ -35,7 +42,7 @@ const SemanticView = dynamic(
     ssr: false,
     loading: () => (
       <div className="flex min-h-48 items-center justify-center rounded-md border border-dashed border-border bg-muted/20 p-6 text-sm text-muted-foreground">
-        Loading the symbol table…
+        Loading the scope tree…
       </div>
     ),
   },
@@ -48,6 +55,30 @@ const IrView = dynamic(
     loading: () => (
       <div className="flex min-h-48 items-center justify-center rounded-md border border-dashed border-border bg-muted/20 p-6 text-sm text-muted-foreground">
         Loading the IR view…
+      </div>
+    ),
+  },
+);
+
+const AssemblyView = dynamic(
+  () => import('@/components/stages/AssemblyView').then((module) => ({ default: module.AssemblyView })),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex min-h-48 items-center justify-center rounded-md border border-dashed border-border bg-muted/20 p-6 text-sm text-muted-foreground">
+        Loading the assembly view…
+      </div>
+    ),
+  },
+);
+
+const ExecView = dynamic(
+  () => import('@/components/stages/ExecView').then((module) => ({ default: module.ExecView })),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex min-h-48 items-center justify-center rounded-md border border-dashed border-border bg-muted/20 p-6 text-sm text-muted-foreground">
+        Loading the execution view…
       </div>
     ),
   },
@@ -104,7 +135,7 @@ function firstErrorDiagnostic(diagnostics: Diagnostic[]): Diagnostic | null {
 
 /** The stage whose failure blocks the given stage, per the status table. */
 function blockingStageFor(stage: Stage, statuses: Record<Stage, StageStatus>): Stage | null {
-  const order: Stage[] = ['lex', 'parse', 'sema', 'ir'];
+  const order: Stage[] = [...PIPELINE_STAGES];
   const index = order.indexOf(stage);
   for (let candidate = index - 1; candidate >= 0; candidate -= 1) {
     const stageName = order[candidate];
@@ -146,21 +177,38 @@ function BlockedStage({ stage, statuses }: { stage: Stage; statuses: Record<Stag
   );
 }
 
-function stageLabelFor(stage: Stage): string {
-  return STAGE_EXPLANATIONS[stage].label;
-}
+/** Step-through mode: this stage has simply not run yet. */
+function NotRunStage({ stage }: { stage: Stage }) {
+  const advanceStep = useWorkspaceStore((state) => state.advanceStep);
+  const runUntil = useWorkspaceStore((state) => state.runUntil);
+  const stepReached = useWorkspaceStore((state) => state.stepReached);
+  const label = stageLabelFor(stage);
 
-function AsmPlaceholder() {
+  const reachedIndex = stepReached === null ? -1 : PIPELINE_STAGES.indexOf(stepReached);
+  const stageIndex = PIPELINE_STAGES.indexOf(stage);
+  const isNext = stageIndex === reachedIndex + 1;
+
   return (
-    <div className="flex min-h-48 flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border bg-muted/20 p-6 text-center">
-      <CircleSlash aria-hidden="true" className="size-5 text-muted-foreground" />
-      <p className="text-sm font-medium">Coming soon</p>
-      <p className="max-w-sm text-xs leading-5 text-muted-foreground">
-        The generated assembly stage is reserved for a later milestone and is not available in
-        this build.
-      </p>
+    <div className="flex min-h-48 flex-col items-start justify-center gap-3 rounded-md border border-dashed border-violet-400 bg-violet-50/50 p-6">
+      <div className="flex items-center gap-2">
+        <Play aria-hidden="true" className="size-5 text-violet-700" />
+        <p className="text-sm font-medium">{STEP_NOT_RUN_TITLE}</p>
+      </div>
+      <p className="max-w-md text-xs leading-5 text-muted-foreground">{STEP_NOT_RUN_BODY(label)}</p>
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" size="sm" onClick={() => advanceStep()} disabled={!isNext}>
+          {STEP_NOT_RUN_RUN_NEXT}
+        </Button>
+        <Button type="button" size="sm" variant="outline" onClick={() => runUntil(stage)}>
+          {STEP_NOT_RUN_RUN_THIS(label)}
+        </Button>
+      </div>
     </div>
   );
+}
+
+function stageLabelFor(stage: Stage): string {
+  return STAGE_EXPLANATIONS[stage].label;
 }
 
 export function StageWorkspace() {
@@ -169,19 +217,23 @@ export function StageWorkspace() {
   const compileStatus = useWorkspaceStore((state) => state.compileStatus);
   const stale = useWorkspaceStore((state) => state.stale);
   const result = useWorkspaceStore((state) => state.result);
+  const stepMode = useWorkspaceStore((state) => state.stepMode);
+  const stepReached = useWorkspaceStore((state) => state.stepReached);
   const stage = STAGE_EXPLANATIONS[activeStage];
-  const stageIndex = ['source', 'lex', 'parse', 'sema', 'ir', 'asm'].indexOf(activeStage) + 1;
+  const stageIndex = ALL_STAGES.indexOf(activeStage) + 1;
 
   const statuses = Object.fromEntries(
-    ['source', 'lex', 'parse', 'sema', 'ir', 'asm'].map((name) => [
+    ALL_STAGES.map((name) => [
       name,
-      deriveStageStatus(name as Stage, result, stale),
+      deriveStageStatus(name, result, stale, stepMode ? stepReached : null),
     ]),
   ) as Record<Stage, StageStatus>;
   const status = statuses[activeStage];
   // Blocked only after a compile (spec §8); before the first compile stages
-  // show their empty states. Assembly is always "Coming soon".
+  // show their empty states. In step-through mode, un-reached stages invite
+  // the next step instead of claiming to be blocked.
   const isBlocked = result !== null && status === 'blocked';
+  const isPending = result !== null && status === 'pending';
 
   return (
     <section
@@ -194,7 +246,7 @@ export function StageWorkspace() {
       <header className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
         <div className="min-w-0 flex-1">
           <p className="text-[0.7rem] font-medium uppercase tracking-wide text-muted-foreground">
-            Stage {stageIndex} of 6
+            Stage {stageIndex} of {ALL_STAGES.length}
           </p>
           <h2 id="stage-workspace-heading" className="truncate text-base font-semibold">
             {stage.label}
@@ -219,11 +271,27 @@ export function StageWorkspace() {
             {activeStage === 'source' ? (
               <SourceOverview source={source} />
             ) : activeStage === 'asm' ? (
-              <AsmPlaceholder />
+              isPending ? (
+                <NotRunStage stage={activeStage} />
+              ) : isBlocked ? (
+                <BlockedStage stage={activeStage} statuses={statuses} />
+              ) : (
+                <AssemblyView />
+              )
+            ) : activeStage === 'sim' ? (
+              isPending ? (
+                <NotRunStage stage={activeStage} />
+              ) : isBlocked ? (
+                <BlockedStage stage={activeStage} statuses={statuses} />
+              ) : (
+                <ExecView />
+              )
             ) : activeStage === 'lex' ? (
               <TokenExplorer />
             ) : activeStage === 'parse' ? (
               <AstExplorer />
+            ) : isPending ? (
+              <NotRunStage stage={activeStage} />
             ) : isBlocked ? (
               <BlockedStage stage={activeStage} statuses={statuses} />
             ) : activeStage === 'sema' ? (

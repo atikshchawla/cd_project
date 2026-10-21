@@ -34,7 +34,7 @@ import {
   astChildCountLabel,
   astNodeCountLabel,
 } from '@/content/explanations';
-import { computeHighlights, createEmptyHighlights } from '@/lib/highlight';
+import { computeHighlights, createEmptyHighlights, selectionTint } from '@/lib/highlight';
 import { positionAt } from '@/lib/positions';
 import { useWorkspaceStore } from '@/lib/store';
 import type { Ast, AstNode, Type } from '@/lib/compiler/types';
@@ -42,13 +42,11 @@ import { cn } from '@/lib/utils';
 
 type ViewMode = 'graph' | 'outline';
 
-function nodeEmphasisClass(isPrimary: boolean, isRelated: boolean, hasFocus: boolean): string {
+function nodeEmphasisClass(isPrimary: boolean, isRelated: boolean, hasFocus: boolean, tintClass: string): string {
   return cn(
     'rounded px-2 py-1 text-left text-xs transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
-    isPrimary &&
-      'bg-amber-100 font-semibold outline outline-2 -outline-offset-2 outline-amber-700',
-    isRelated &&
-      'bg-sky-50 underline decoration-dashed decoration-sky-700/70 underline-offset-2',
+    isPrimary && cn('sel-primary', tintClass),
+    isRelated && 'sel-related',
     !isPrimary && !isRelated && hasFocus && 'bg-muted/60',
   );
 }
@@ -76,6 +74,7 @@ interface AstOutlineProps {
   primaryNodeId: number | null;
   relatedNodeIds: Set<number>;
   selectedNodeId: number | null;
+  tintClass: string;
   onToggle: (nodeId: number) => void;
   onSelect: (nodeId: number) => void;
 }
@@ -87,6 +86,7 @@ function AstOutline({
   primaryNodeId,
   relatedNodeIds,
   selectedNodeId,
+  tintClass,
   onToggle,
   onSelect,
 }: AstOutlineProps) {
@@ -131,7 +131,7 @@ function AstOutline({
             onClick={() => onSelect(nodeId)}
             className={cn(
               'flex min-w-0 flex-1 items-center gap-2',
-              nodeEmphasisClass(isPrimary, isRelated, false),
+              nodeEmphasisClass(isPrimary, isRelated, false, tintClass),
               isDimmed && 'opacity-80',
             )}
           >
@@ -240,6 +240,7 @@ export function AstExplorer() {
     () => (stale ? createEmptyHighlights() : computeHighlights(selection, result)),
     [selection, result, stale],
   );
+  const tintClass = useMemo(() => `tint-${selectionTint(selection, result)}`, [selection, result]);
   const primaryNodeId = highlights.primary?.stage === 'parse' ? highlights.primary.id : null;
   const relatedNodeIds = highlights.astNodeIds;
   const selectedNodeId = selection.kind === 'ast' ? selection.nodeId : null;
@@ -311,6 +312,7 @@ export function AstExplorer() {
           isPrimary,
           isRelated,
           isDimmed,
+          tintClass,
           hasChildren: node.childIds.length > 0,
           isCollapsed: collapsed.has(nodeId),
           onSelect: () => selectNode(nodeId),
@@ -320,7 +322,7 @@ export function AstExplorer() {
     });
 
     return { nodes, edges };
-  }, [ast, collapsed, primaryNodeId, relatedNodeIds, selectNode, toggleCollapse]);
+  }, [ast, collapsed, primaryNodeId, relatedNodeIds, selectNode, toggleCollapse, tintClass]);
 
   const emptyMessage =
     result === null
@@ -396,6 +398,7 @@ export function AstExplorer() {
                   primaryNodeId={primaryNodeId}
                   relatedNodeIds={relatedNodeIds}
                   selectedNodeId={selectedNodeId}
+                  tintClass={tintClass}
                   onToggle={toggleCollapse}
                   onSelect={selectNode}
                 />

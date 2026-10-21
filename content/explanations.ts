@@ -8,7 +8,7 @@ export interface StageExplanation {
   whyItMatters: string;
 }
 
-export const STAGE_ORDER: Stage[] = ['source', 'lex', 'parse', 'sema', 'ir', 'asm'];
+export const STAGE_ORDER: Stage[] = ['source', 'lex', 'parse', 'sema', 'ir', 'asm', 'sim'];
 
 export const STAGE_EXPLANATIONS: Record<Stage, StageExplanation> = {
   source: {
@@ -65,18 +65,28 @@ export const STAGE_EXPLANATIONS: Record<Stage, StageExplanation> = {
     label: 'Generated Assembly',
     shortLabel: 'Assembly',
     simple:
-      'Assembly is a low-level textual form of a program, close to what a processor executes. This stage is not available yet.',
+      'Assembly is a low-level textual form of a program, close to what a processor executes. This stage lowers the IR to illustrative x86-64 assembly text.',
     technical:
-      'The planned view will show illustrative x86-64 assembly text derived from the IR. It will never be assembled or executed by this app.',
+      'The lowering is deliberately naive: every IR value lives in its own stack slot, arguments move through the standard integer registers, and each assembly line records the IR instruction it came from so the mapping is exact. The output uses Intel syntax.',
     whyItMatters:
       'Seeing the lowering from IR to assembly completes the story of how high-level structure becomes simple instructions and memory accesses.',
+  },
+  sim: {
+    label: 'Execution (VM)',
+    shortLabel: 'Execution',
+    simple:
+      'This stage runs the generated IR on a small simulated machine, one instruction at a time, and shows the stack, frames and memory as they change.',
+    technical:
+      'A trace-first interpreter executes the unoptimised IR with 32-bit C integer semantics. Every step records a snapshot of the machine: the data segment (globals), the stack of frames with their 4-byte cells, and the current instruction. Stepping back just moves an index through the recorded trace.',
+    whyItMatters:
+      'Watching execution step by step makes abstract ideas concrete: frames really occupy stack space, calls really push and returns really pop, and every value really lives somewhere.',
   },
 };
 
 export const ABOUT_STATEMENT =
   'This app uses its own educational Mini-C compiler written in TypeScript. Its output resembles Clang/LLVM output but is not produced by Clang or LLVM.';
 
-export type ProvenanceKind = 'generated' | 'derived' | 'illustrative';
+export type ProvenanceKind = 'generated' | 'derived' | 'illustrative' | 'simulated';
 
 export const PROVENANCE: Record<ProvenanceKind, { label: string; description: string }> = {
   generated: {
@@ -90,6 +100,11 @@ export const PROVENANCE: Record<ProvenanceKind, { label: string; description: st
   illustrative: {
     label: 'illustrative',
     description: 'Hand-written teaching material, not output from the compiler.',
+  },
+  simulated: {
+    label: 'simulated',
+    description:
+      'Produced by this app’s own IR interpreter. It models execution faithfully but is not a real CPU.',
   },
 };
 
@@ -336,6 +351,27 @@ export const SEMA_SCOPE_BLOCK = 'block';
 export const SEMA_EMPTY_TABLE = 'This program declares no symbols.';
 export const SEMA_USES_HINT =
   'Click a row to highlight the declaration and every use in the source, tokens and IR.';
+export const SEMA_VIEW_MODE_LABEL = 'Semantic view';
+export const SEMA_TREE_LABEL = 'Scope tree';
+export const SEMA_TABLE_LABEL = 'Symbol table';
+export const SEMA_TREE_EMPTY = 'This program has no scopes to show yet.';
+export const SEMA_SCOPE_TREE_TITLE = 'Scope tree';
+export const SEMA_SCOPE_PANEL_TITLE = 'Selected scope';
+export const SEMA_SCOPE_EMPTY_SELECTION =
+  'Click a scope or symbol node in the tree to see what it contains. Symbol nodes highlight their declaration and uses.';
+export const SEMA_SCOPE_KIND_LABEL = 'Kind';
+export const SEMA_SCOPE_OWNER_LABEL = 'Owned by';
+export const SEMA_SCOPE_PARENT_LABEL = 'Parent scope';
+export const SEMA_SCOPE_SYMBOLS_LABEL = 'Symbols here';
+export const SEMA_SCOPE_NONE = 'none (outermost scope)';
+export const SEMA_SCOPE_SYMBOL_COUNT = 'symbols in this scope';
+export const SEMA_SCOPE_TREE_HINT =
+  'The scope tree shows how names are nested: each scope holds its own symbols, and inner scopes see outer ones. Click a symbol node to highlight it everywhere.';
+export const SEMA_SCOPE_GLOBAL_LABEL = 'global scope';
+export function semaScopeFunctionLabel(name: string): string {
+  return `function ${name}`;
+}
+export const SEMA_SCOPE_BLOCK_LABEL = 'block';
 
 export const SYMBOL_KIND_EXPLANATIONS: Record<string, string> = {
   function: 'A function defined (or declared) at the top level.',
@@ -580,3 +616,94 @@ export const STAGE_CRASH_TITLE = 'This stage view stopped working';
 export const STAGE_CRASH_BODY =
   'A view in the stage workspace hit an unexpected error. Your source and compile result are safe. Switch to another stage, or reload the page.';
 export const STAGE_CRASH_RELOAD = 'Reload the page';
+
+// ---------------------------------------------------------------------------
+// Assembly view
+// ---------------------------------------------------------------------------
+
+export const ASM_NO_RESULT = 'Compile a program to generate assembly text.';
+export const ASM_BLOCKED =
+  'No assembly: earlier errors stopped the compiler before IR generation. Fix the errors and recompile.';
+export const ASM_LINE_COUNT_LABEL = 'lines';
+export const ASM_NOTE_TITLE = 'About this assembly';
+export const ASM_NOTE =
+  'This is illustrative x86-64 assembly text produced by this app’s own compiler from its IR — not by Clang or LLVM. It is never assembled or executed here; the Execution stage interprets the IR directly instead.';
+export const ASM_EMPTY_SELECTION =
+  'Click an instruction row to see which IR instruction it lowers and where that came from in the source.';
+export const ASM_INSTRUCTION_TITLE = 'Selected instruction';
+export const ASM_MAPPED_IR_LABEL = 'Lowers this IR';
+export const ASM_NO_MAPPING =
+  'This line is scaffolding (a label, directive or prologue instruction). It has no single IR origin.';
+export const ASM_FUNCTION_LABEL = 'Function';
+export const ASM_ALL_FUNCTIONS = 'All functions';
+
+// ---------------------------------------------------------------------------
+// Execution (VM) view
+// ---------------------------------------------------------------------------
+
+export const EXEC_NO_RESULT = 'Compile a program, then open this stage to execute its IR.';
+export const EXEC_BLOCKED =
+  'No execution: the IR was not generated, so there is nothing to run. Fix the earlier errors and recompile.';
+export const EXEC_SIMULATED_LABEL = 'simulated';
+export const EXEC_STEP_LABEL = 'Step';
+export const EXEC_STEP_BACK_LABEL = 'Step back';
+export const EXEC_RUN_LABEL = 'Run';
+export const EXEC_PAUSE_LABEL = 'Pause';
+export const EXEC_RESET_LABEL = 'Reset';
+export const EXEC_STEP_OF = (index: number, total: number): string =>
+  `Step ${index} of ${Math.max(total - 1, 0)}`;
+export const EXEC_STACK_TITLE = 'Stack';
+export const EXEC_STACK_EMPTY = 'The stack is empty.';
+export const EXEC_FRAME_BYTES = (bytes: number): string => `${bytes} bytes`;
+export const EXEC_SLOT_UNTITLED = 'value';
+export const EXEC_DATA_TITLE = 'Data segment (globals)';
+export const EXEC_DATA_EMPTY = 'This program has no global variables.';
+export const EXEC_HEAP_TITLE = 'Heap';
+export const EXEC_HEAP_EMPTY =
+  'Mini-C has no dynamic allocation, so the heap stays empty. Everything lives on the stack or in globals.';
+export const EXEC_MEMORY_TITLE = 'Memory';
+export const EXEC_STACK_DEPTH = (frames: number): string =>
+  `${frames} frame${frames === 1 ? '' : 's'}`;
+export const EXEC_TRACE_TITLE = 'Execution trace';
+export const EXEC_TRACE_EMPTY = 'Run or step the program to build a trace.';
+export const EXEC_CURRENT_INSTRUCTION = 'Current instruction';
+export const EXEC_NO_INSTRUCTION = 'No instruction is executing at this step.';
+export const EXEC_RESULT_TITLE = 'Result';
+export const EXEC_RESULT_RUNNING = 'The program has not finished yet.';
+export const EXEC_RESULT_VALUE = (value: number): string =>
+  `main returned ${value} (0x${(value >>> 0).toString(16)}).`;
+export const EXEC_RESULT_VOID = 'main returned without a value (void).';
+export const EXEC_OUTCOME_FINISHED = 'Finished';
+export const EXEC_OUTCOME_STEP_LIMIT = 'Stopped at the step limit';
+export const EXEC_OUTCOME_NO_MAIN = 'No main function';
+export const EXEC_OUTCOME_ERROR = 'Runtime error';
+export const EXEC_JUST_ALLOCATED = 'just allocated';
+export const EXEC_JUST_WRITTEN = 'just written';
+export const EXEC_RELEASED_TITLE = 'Just released';
+export const EXEC_RELEASED_FRAME = (name: string, bytes: number): string =>
+  `Frame of ${name} — ${bytes} bytes returned to the stack.`;
+export const EXEC_SLOT_COUNT = (count: number): string =>
+  `${count} cell${count === 1 ? '' : 's'}`;
+
+// ---------------------------------------------------------------------------
+// Step-through mode
+// ---------------------------------------------------------------------------
+
+export const STEP_THROUGH_LABEL = 'Step through';
+export const STEP_THROUGH_ACTIVE = 'Step mode';
+export const STEP_THROUGH_TITLE = 'Step-through compilation';
+export const STEP_THROUGH_HINT =
+  'Each action runs the next compiler stage and opens its view, so you can watch the pipeline one stage at a time.';
+export const STEP_THROUGH_REACHED = (label: string): string => `Ran: ${label}`;
+export const STEP_THROUGH_NEXT = (label: string): string => `Run ${label}`;
+export const STEP_THROUGH_RUN_ALL = 'Run remaining';
+export const STEP_THROUGH_EXIT = 'Exit step mode';
+export const STEP_THROUGH_START = 'Start at the first stage';
+export const STEP_THROUGH_DONE = 'Every compile stage has run.';
+export const STEP_THROUGH_FAILED = (label: string): string =>
+  `${label} reported errors, so the pipeline stopped here.`;
+export const STEP_NOT_RUN_TITLE = 'This stage has not run yet';
+export const STEP_NOT_RUN_BODY = (label: string): string =>
+  `Step-through mode has not reached ${label} yet. Run the next stage, or run the remaining stages at once.`;
+export const STEP_NOT_RUN_RUN_NEXT = 'Run the next stage';
+export const STEP_NOT_RUN_RUN_THIS = (label: string): string => `Run ${label}`;

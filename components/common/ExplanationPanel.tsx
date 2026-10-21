@@ -41,6 +41,8 @@ function selectionLabel(selection: Selection): string {
       return `symbol #${selection.symbolId}`;
     case 'ir':
       return `IR instruction #${selection.instrId}`;
+    case 'asm':
+      return `assembly line #${selection.lineId}`;
     case 'diagnostic':
       return `diagnostic #${selection.diagnosticId}`;
     default:
@@ -233,6 +235,51 @@ function IrDetail({ instrId }: { instrId: number }) {
   );
 }
 
+function AsmDetail({ lineId }: { lineId: number }) {
+  const result = useWorkspaceStore((state) => state.result);
+  const line = result?.asm?.lines.find((candidate) => candidate.lineNo === lineId);
+
+  if (line === undefined) {
+    return <p className="text-sm leading-6 text-muted-foreground">{SELECTION_DETAILS_PENDING}</p>;
+  }
+
+  const irLine =
+    line.irInstrId !== undefined
+      ? result?.ir?.lines.find((candidate) => candidate.instrId === line.irInstrId)
+      : undefined;
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant="outline" className="font-mono text-[0.7rem]">
+          {line.kind}
+        </Badge>
+        {line.funcName !== undefined ? (
+          <span className="text-xs text-muted-foreground">in {line.funcName}</span>
+        ) : null}
+        <span className="font-mono text-xs text-muted-foreground">line {line.lineNo}</span>
+      </div>
+      <code className="w-fit max-w-full overflow-x-auto rounded border border-border bg-muted/40 px-2 py-1 font-mono text-sm">
+        {line.text}
+      </code>
+      {irLine !== undefined ? (
+        <p className="text-xs leading-5 text-muted-foreground">
+          Lowered from IR:{' '}
+          <code className="font-mono">{irLine.text}</code>
+        </p>
+      ) : (
+        <p className="text-xs leading-5 text-muted-foreground">
+          Function scaffolding (labels, prologue, epilogue); no single IR instruction maps here.
+        </p>
+      )}
+      <p className="text-xs leading-5 text-muted-foreground">
+        Generated assembly — shown for study only; it is never assembled or executed by this
+        tool. The execution stage interprets the IR directly.
+      </p>
+    </div>
+  );
+}
+
 function DiagnosticDetail({ diagnosticId }: { diagnosticId: number }) {
   const result = useWorkspaceStore((state) => state.result);
   const diagnostic = result?.diagnostics.find((candidate) => candidate.id === diagnosticId);
@@ -400,6 +447,8 @@ export function ExplanationPanel() {
               <SymbolDetail symbolId={selection.symbolId} />
             ) : selection.kind === 'ir' ? (
               <IrDetail instrId={selection.instrId} />
+            ) : selection.kind === 'asm' ? (
+              <AsmDetail lineId={selection.lineId} />
             ) : selection.kind === 'diagnostic' ? (
               <DiagnosticDetail diagnosticId={selection.diagnosticId} />
             ) : (

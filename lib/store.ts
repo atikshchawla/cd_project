@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { compile, normaliseSource } from '@/lib/compiler';
+import { compile, compileUpTo, normaliseSource, PIPELINE_STAGES } from '@/lib/compiler';
 import type { CompileResult, Range, Stage } from '@/lib/compiler/types';
 import { hashSource } from '@/lib/hash';
 import { getExampleById } from '@/content/examples';
@@ -14,9 +14,10 @@ export type Selection =
   | { kind: 'ast'; nodeId: number; origin: Origin }
   | { kind: 'symbol'; symbolId: number; origin: Origin }
   | { kind: 'ir'; instrId: number; origin: Origin }
+  | { kind: 'asm'; lineId: number; origin: Origin }
   | { kind: 'diagnostic'; diagnosticId: number; origin: Origin };
 
-// Later: 'irblock' | 'asm' | 'sim'.
+// Later: 'irblock' | 'sim'.
 
 export type CompileStatus = 'idle' | 'compiling' | 'compiled';
 
@@ -29,6 +30,10 @@ export interface WorkspaceData {
   compileStatus: CompileStatus;
   stale: boolean;
   aboutOpen: boolean;
+  /** Step-through mode: compile one pipeline stage per user action. */
+  stepMode: boolean;
+  /** The furthest pipeline stage the stepper has run (null = none yet). */
+  stepReached: Stage | null;
 }
 
 interface WorkspaceActions {
@@ -39,6 +44,14 @@ interface WorkspaceActions {
   setActiveStage: (stage: Stage) => void;
   compileSource: () => void;
   setAboutOpen: (open: boolean) => void;
+  /** Enter step-through mode and run nothing yet. */
+  startStepThrough: () => void;
+  /** Leave step-through mode; the next Compile runs the whole pipeline. */
+  stopStepThrough: () => void;
+  /** Run the next un-run pipeline stage (lex → parse → sema → ir → asm). */
+  advanceStep: () => void;
+  /** Run pipeline stages until `stage` has been reached (or the pipeline stops). */
+  runUntil: (stage: Stage) => void;
 }
 
 export type WorkspaceState = WorkspaceData & WorkspaceActions;
@@ -52,10 +65,20 @@ export const INITIAL_WORKSPACE_DATA: WorkspaceData = {
   compileStatus: 'idle',
   stale: false,
   aboutOpen: false,
+  stepMode: false,
+  stepReached: null,
 };
 
 /** Invalidates an in-flight compile when the workspace loads different text. */
 let compileRequest = 0;
+
+/** The next pipeline stage after `reached`, or null when the pipeline ended. */
+function nextPipelineStage(reached: Stage | null): Stage | null {
+  if (reached === null) return PIPELINE_STAGES[0] ?? null;
+  const index = PIPELINE_STAGES.indexOf(reached);
+  if (index === -1 || index === PIPELINE_STAGES.length - 1) return null;
+  return PIPELINE_STAGES[index + 1] ?? null;
+}
 
 export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
   ...INITIAL_WORKSPACE_DATA,
@@ -83,6 +106,8 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
       selection: { kind: 'none' },
       compileStatus: 'idle',
       stale: false,
+      stepMode: false,
+      stepReached: null,
     });
   },
 
@@ -96,6 +121,8 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
       selection: { kind: 'none' },
       compileStatus: 'idle',
       stale: false,
+      stepMode: false,
+      stepReached: null,
     });
   },
 
@@ -111,7 +138,6 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
   },
 
   setActiveStage: (stage) => {
-    if (stage === 'asm') return;
     set({ activeStage: stage });
   },
 
@@ -126,6 +152,8 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
       result: null,
       selection: { kind: 'none' },
       stale: false,
+      stepMode: false,
+      stepReached: null,
     });
 
     // Let the "Compiling…" state paint before the synchronous compiler runs.
@@ -144,4 +172,60 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
   },
 
   setAboutOpen: (open) => set({ aboutOpen: open }),
+
+  startStepThrough: () => {
+    if (sourceTooLarge(get().source)) return;
+    compileRequest += 1;
+    set({
+      stepMode: true,
+      stepReached: null,
+      result: null,
+      compileStatus: 'idle',
+      selection: { kind: 'none' },
+      stale: false,
+      activeStage: 'source',
+    });
+  },
+
+  stopStepThrough: () => {
+    set({ stepMode: false, stepReached: null });
+  },
+
+  advanceStep: () => {
+    const { stepMode, stepReached, source } = get();
+    if (!stepMode || sourceTooLarge(source)) return;
+    const next = nextPipelineStage(stepReached);
+    if (next === null) return;
+
+    const result = compileUpTo(source, next);
+    set({
+      result,
+      compileStatus: 'compiled',
+      selection: { kind: 'none' },
+      stale: hashSource(normaliseSource(source)) !== result.sourceHash,
+      stepReached: next,
+      activeStage: next,
+    });
+  },
+
+  runUntil: (stage) => {
+    const { stepMode, stepReached, source } = get();
+    if (!stepMode) return;
+    const targetIndex = PIPELINE_STAGES.indexOf(stage);
+    if (targetIndex === -1) return;
+    const reachedIndex = stepReached === null ? -1 : PIPELINE_STAGES.indexOf(stepReached);
+    if (targetIndex <= reachedIndex) {
+      set({ activeStage: stage });
+      return;
+    }
+    const result = compileUpTo(source, stage);
+    set({
+      result,
+      compileStatus: 'compiled',
+      selection: { kind: 'none' },
+      stale: hashSource(normaliseSource(source)) !== result.sourceHash,
+      stepReached: stage,
+      activeStage: stage,
+    });
+  },
 }));

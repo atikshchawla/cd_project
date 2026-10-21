@@ -29,7 +29,7 @@ import {
   TOKEN_LEGEND_TITLE,
   TOKEN_LIMIT_NOTICE,
 } from '@/content/explanations';
-import { computeHighlights, createEmptyHighlights } from '@/lib/highlight';
+import { computeHighlights, createEmptyHighlights, selectionTint } from '@/lib/highlight';
 import { useWorkspaceStore } from '@/lib/store';
 import type { Token, TokenKind } from '@/lib/compiler/types';
 import { cn } from '@/lib/utils';
@@ -69,6 +69,7 @@ export function TokenExplorer() {
     () => (stale ? createEmptyHighlights() : computeHighlights(selection, result)),
     [selection, result, stale],
   );
+  const tintClass = useMemo(() => `tint-${selectionTint(selection, result)}`, [selection, result]);
 
   const selectedTokenId = selection.kind === 'token' ? selection.tokenId : null;
   const hasSelection = selection.kind !== 'none' && !stale;
@@ -190,8 +191,8 @@ export function TokenExplorer() {
                   onKeyDown={(event) => onRowKeyDown(event, index)}
                   className={cn(
                     'grid w-full grid-cols-[minmax(5.5rem,7rem)_minmax(0,1fr)_4.5rem_3.5rem] items-center gap-2 border-b border-border/60 px-2 py-1.5 text-left text-sm transition-colors last:border-b-0 hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
-                    isPrimary && 'bg-amber-100 font-semibold outline outline-2 -outline-offset-2 outline-amber-700',
-                    isRelated && 'bg-sky-50 underline decoration-dashed decoration-sky-700/70 underline-offset-2',
+                    isPrimary && cn('sel-primary', tintClass),
+                    isRelated && 'sel-related',
                     isUnrelated && 'opacity-80',
                   )}
                 >

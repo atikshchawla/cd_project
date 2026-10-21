@@ -1,6 +1,6 @@
 'use client';
 
-import { CircleHelp, Play, TriangleAlert } from 'lucide-react';
+import { CircleHelp, ListStart, Play, TriangleAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { STALE_BANNER } from '@/content/explanations';
@@ -12,6 +12,7 @@ import { ProvenanceBanner } from './ProvenanceBanner';
 import { SettingsStrip } from './SettingsStrip';
 import { StageNavigator } from './StageNavigator';
 import { StageWorkspace } from './StageWorkspace';
+import { StepThroughBar } from './StepThroughBar';
 import { useWorkspaceStore } from '@/lib/store';
 import { sourceTooLarge } from '@/lib/status';
 
@@ -21,6 +22,8 @@ export function AppShell() {
   const stale = useWorkspaceStore((state) => state.stale);
   const source = useWorkspaceStore((state) => state.source);
   const setAboutOpen = useWorkspaceStore((state) => state.setAboutOpen);
+  const stepMode = useWorkspaceStore((state) => state.stepMode);
+  const startStepThrough = useWorkspaceStore((state) => state.startStepThrough);
   const isCompiling = compileStatus === 'compiling';
   const tooLarge = sourceTooLarge(source);
 
@@ -32,7 +35,7 @@ export function AppShell() {
             <div className="mr-auto min-w-0">
               <h1 className="text-base font-semibold leading-6">Mini-C Compiler Visualizer</h1>
               <p className="text-xs text-muted-foreground">
-                Source → Tokens → AST → Semantic analysis → LLVM-style IR
+                Source → Tokens → AST → Semantic analysis → IR → Assembly → Execution
               </p>
             </div>
 
@@ -56,6 +59,18 @@ export function AppShell() {
 
             <Button
               type="button"
+              size="sm"
+              variant={stepMode ? 'default' : 'secondary'}
+              onClick={() => startStepThrough()}
+              disabled={isCompiling || tooLarge}
+              title="Compile one stage at a time and watch each artifact appear"
+            >
+              <ListStart aria-hidden="true" />
+              Step through
+            </Button>
+
+            <Button
+              type="button"
               variant="ghost"
               size="sm"
               onClick={() => setAboutOpen(true)}
@@ -67,6 +82,7 @@ export function AppShell() {
         </header>
 
         <div className="mx-auto flex w-full max-w-[1600px] flex-1 flex-col gap-3 px-4 py-4">
+          <StepThroughBar />
           <StageNavigator />
           <SettingsStrip />
           <ProvenanceBanner />

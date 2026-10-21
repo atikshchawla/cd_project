@@ -49,7 +49,7 @@ export function AboutDialog() {
           <section className="flex flex-col gap-2">
             <h3 className="font-semibold">Provenance</h3>
             <ul className="flex flex-col gap-1.5">
-              {(['generated', 'derived', 'illustrative'] as const).map((kind) => (
+              {(['generated', 'derived', 'illustrative', 'simulated'] as const).map((kind) => (
                 <li key={kind} className="flex items-start gap-2">
                   <ProvenanceBadge kind={kind} className="mt-0.5 shrink-0" />
                   <span className="text-muted-foreground">{PROVENANCE[kind].description}</span>

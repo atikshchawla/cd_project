@@ -34,7 +34,7 @@ import {
   IR_VAR_LABEL,
   IROPCODE_EXPLANATIONS,
 } from '@/content/explanations';
-import { computeHighlights, createEmptyHighlights } from '@/lib/highlight';
+import { computeHighlights, createEmptyHighlights, selectionTint } from '@/lib/highlight';
 import { useWorkspaceStore } from '@/lib/store';
 import type { IRInstr, IRLine, IROperand } from '@/lib/compiler/types';
 import { cn } from '@/lib/utils';
@@ -177,6 +177,7 @@ export function IrView() {
     () => (stale ? createEmptyHighlights() : computeHighlights(selection, result)),
     [selection, result, stale],
   );
+  const tintClass = useMemo(() => `tint-${selectionTint(selection, result)}`, [selection, result]);
 
   const lines = useMemo(() => result?.ir?.lines ?? [], [result]);
   const functions = useMemo(
@@ -363,9 +364,8 @@ export function IrView() {
                   onKeyDown={(event) => onRowKeyDown(event, index)}
                   className={cn(
                     'flex w-full items-center border-b border-border/60 px-1 text-left transition-colors last:border-b-0 hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
-                    isPrimary &&
-                      'bg-amber-100 font-semibold outline outline-2 -outline-offset-2 outline-amber-700',
-                    isRelated && 'bg-sky-50',
+                    isPrimary && cn('sel-primary', tintClass),
+                    isRelated && 'sel-related',
                     isUnrelated && 'opacity-80',
                   )}
                 >

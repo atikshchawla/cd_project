@@ -23,6 +23,7 @@ export interface AstGraphData extends Record<string, unknown> {
   isPrimary: boolean;
   isRelated: boolean;
   isDimmed: boolean;
+  tintClass: string;
   hasChildren: boolean;
   isCollapsed: boolean;
   onSelect: () => void;
@@ -43,9 +44,8 @@ function AstFlowNode({ data }: NodeProps<AstGraphNode>) {
       title={data.title}
       className={cn(
         'relative flex h-11 w-[180px] items-center gap-1 rounded-md border border-border bg-background px-1.5 text-xs shadow-sm transition-colors',
-        data.isPrimary && 'bg-amber-100 font-semibold outline outline-2 -outline-offset-2 outline-amber-700',
-        data.isRelated &&
-          'bg-sky-50 underline decoration-dashed decoration-sky-700/70 underline-offset-2',
+        data.isPrimary && cn('sel-primary', data.tintClass),
+        data.isRelated && 'sel-related',
         data.isDimmed && 'opacity-80',
       )}
     >

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compile } from '@/lib/compiler';
+import { compile, compileUpTo } from '@/lib/compiler';
 import type { CompileResult, Stage } from '@/lib/compiler/types';
 import { SOURCE_LIMIT_CHARS, SOURCE_LIMIT_LINES } from '@/content/explanations';
 import {
@@ -13,7 +13,7 @@ function compiledStatuses(source: string): CompileResult {
   return compile(source);
 }
 
-const ALL_PIPELINE_STAGES: Stage[] = ['lex', 'parse', 'sema', 'ir'];
+const ALL_PIPELINE_STAGES: Stage[] = ['lex', 'parse', 'sema', 'ir', 'asm', 'sim'];
 
 describe('deriveStageStatus (spec §8 table)', () => {
   it('reports ready for every stage before the first compile', () => {
@@ -70,11 +70,52 @@ describe('deriveStageStatus (spec §8 table)', () => {
     }
   });
 
-  it('always blocks the deferred assembly stage', () => {
-    expect(deriveStageStatus('asm', null, false)).toBe('blocked');
-    expect(
-      deriveStageStatus('asm', compiledStatuses('int main() { return 0; }'), false),
-    ).toBe('blocked');
+  it('reports ready for assembly and execution before the first compile', () => {
+    expect(deriveStageStatus('asm', null, false)).toBe('ready');
+    expect(deriveStageStatus('sim', null, false)).toBe('ready');
+  });
+
+  it('follows the failure rows through assembly and execution', () => {
+    const parseError = compiledStatuses('int main() { return 1 }');
+    expect(deriveStageStatus('asm', parseError, false)).toBe('blocked');
+    expect(deriveStageStatus('sim', parseError, false)).toBe('blocked');
+
+    const semaError = compiledStatuses('int main() { return unknownName; }');
+    expect(deriveStageStatus('asm', semaError, false)).toBe('blocked');
+    expect(deriveStageStatus('sim', semaError, false)).toBe('blocked');
+  });
+
+  it('reports pending for stages the stepper has not reached', () => {
+    const result = compiledStatuses('int main() { return 0; }');
+
+    // Before the first step nothing has run.
+    expect(deriveStageStatus('lex', result, false, 'lex')).toBe('ok');
+    expect(deriveStageStatus('parse', result, false, 'lex')).toBe('pending');
+    expect(deriveStageStatus('asm', result, false, 'lex')).toBe('pending');
+    expect(deriveStageStatus('asm', result, false, 'ir')).toBe('pending');
+    // Execution runs the IR lazily in the UI, so it is available the moment
+    // the IR exists — stepping past 'ir' does not mark it pending.
+    expect(deriveStageStatus('sim', result, false, 'ir')).toBe('ok');
+  });
+
+  it('never reports pending for a stage that itself failed', () => {
+    const result = compiledStatuses('int main() { return 1 }');
+
+    // The stepper stopped at lex, but parse already failed: failed, not pending.
+    expect(deriveStageStatus('parse', result, false, 'lex')).toBe('failed');
+  });
+
+  it('reports blocked for later stages when an earlier stage failed while stepping', () => {
+    const parseRan = compileUpTo('int main() { return 1 }', 'parse');
+
+    expect(deriveStageStatus('parse', parseRan, false, 'parse')).toBe('failed');
+    expect(deriveStageStatus('sema', parseRan, false, 'parse')).toBe('blocked');
+    expect(deriveStageStatus('asm', parseRan, false, 'parse')).toBe('blocked');
+  });
+
+  it('treats a null step-reached as "not stepping" and reports compiled status', () => {
+    const result = compiledStatuses('int main() { return 0; }');
+    expect(deriveStageStatus('parse', result, false, null)).toBe('ok');
   });
 });
 

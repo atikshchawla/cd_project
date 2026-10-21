@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { COMPILER_VERSION, compile, normaliseSource } from '@/lib/compiler';
+import { COMPILER_VERSION, compile, compileUpTo, normaliseSource } from '@/lib/compiler';
 import type { Stage } from '@/lib/compiler/types';
 import { hashSource } from '@/lib/hash';
 
-const ALL_STAGES: Stage[] = ['source', 'lex', 'parse', 'sema', 'ir', 'asm'];
+const ALL_STAGES: Stage[] = ['source', 'lex', 'parse', 'sema', 'ir', 'asm', 'sim'];
 
 describe('compiler pipeline (lexer milestone)', () => {
   it('normalises CRLF and bare CR to LF', () => {
@@ -36,13 +36,15 @@ describe('compiler pipeline (lexer milestone)', () => {
       parse: 'ok',
       sema: 'ok',
       ir: 'ok',
-      asm: 'blocked',
+      asm: 'ok',
+      sim: 'ok',
     });
     expect(result.tokens.length).toBeGreaterThan(0);
     expect(result.ast).not.toBeNull();
     expect(result.symbols).not.toBeNull();
     expect(result.ir).not.toBeNull();
-    expect(result.asm).toBeNull();
+    expect(result.asm).not.toBeNull();
+    expect(result.asm?.lines.length).toBeGreaterThan(0);
     expect(result.diagnostics).toEqual([]);
     expect(result.meta.compilerVersion).toBe(COMPILER_VERSION);
     expect(result.meta.target).toBe('Mini-C (educational)');
@@ -57,6 +59,8 @@ describe('compiler pipeline (lexer milestone)', () => {
       parse: 'failed',
       sema: 'blocked',
       ir: 'blocked',
+      asm: 'blocked',
+      sim: 'blocked',
     });
     expect(result.ast).toBeNull();
     expect(result.tokens.length).toBeGreaterThan(0);
@@ -67,13 +71,32 @@ describe('compiler pipeline (lexer milestone)', () => {
   it('marks the lexer failed and never runs later stages after a lexical error', () => {
     const result = compile('int a = 2147483648;');
 
-    expect(result.completed.lex).toBe('failed');
-    expect(result.completed.parse).toBe('blocked');
-    expect(result.completed.sema).toBe('blocked');
-    expect(result.completed.ir).toBe('blocked');
+      expect(result.completed.lex).toBe('failed');
+      expect(result.completed.parse).toBe('blocked');
+      expect(result.completed.sema).toBe('blocked');
+      expect(result.completed.ir).toBe('blocked');
+      expect(result.completed.asm).toBe('blocked');
+      expect(result.completed.sim).toBe('blocked');
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]).toMatchObject({ code: 'E1004', stage: 'lex' });
     expect(result.tokens.map((token) => token.text)).toContain('2147483648');
+  });
+
+  it('compileUpTo stops after the requested stage', () => {
+    const result = compileUpTo('int main() { return 0; }', 'parse');
+
+    expect(result.completed).toMatchObject({
+      lex: 'ok',
+      parse: 'ok',
+      sema: 'blocked',
+      ir: 'blocked',
+      asm: 'blocked',
+      sim: 'blocked',
+    });
+    expect(result.ast).not.toBeNull();
+    expect(result.symbols).toBeNull();
+    expect(result.ir).toBeNull();
+    expect(result.asm).toBeNull();
   });
 
   it('never throws, even for non-string runtime input', () => {

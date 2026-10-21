@@ -1,9 +1,19 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
+import dagre from '@dagrejs/dagre';
 import { ShieldCheck } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { DiagnosticList } from '@/components/common/DiagnosticList';
+import {
+  SCOPE_NODE_HEIGHT,
+  SCOPE_NODE_WIDTH,
+  SYMBOL_NODE_HEIGHT,
+  SYMBOL_NODE_WIDTH,
+  ScopeTreeCanvas,
+  type ScopeTreeNode,
+} from '@/components/common/ScopeTreeCanvas';
 import { ProvenanceBadge } from '@/components/shell/ProvenanceBadge';
 import {
   SEMA_BLOCKED,
@@ -14,16 +24,32 @@ import {
   SEMA_COL_USES,
   SEMA_EMPTY_TABLE,
   SEMA_NO_RESULT,
+  SEMA_SCOPE_EMPTY_SELECTION,
+  SEMA_SCOPE_GLOBAL_LABEL,
+  SEMA_SCOPE_KIND_LABEL,
+  SEMA_SCOPE_LABEL,
+  SEMA_SCOPE_NONE,
+  SEMA_SCOPE_OWNER_LABEL,
+  SEMA_SCOPE_PARENT_LABEL,
+  SEMA_SCOPE_SYMBOL_COUNT,
+  SEMA_SCOPE_SYMBOLS_LABEL,
+  SEMA_SCOPE_TREE_HINT,
+  SEMA_SCOPE_TREE_TITLE,
   SEMA_SYMBOL_COUNT_LABEL,
   SEMA_SYMBOL_TABLE_TITLE,
+  SEMA_TABLE_LABEL,
+  SEMA_TREE_EMPTY,
+  SEMA_TREE_LABEL,
   SEMA_USES_HINT,
+  SEMA_VIEW_MODE_LABEL,
   SYMBOL_KIND_EXPLANATIONS,
+  semaScopeFunctionLabel,
   typeToString,
 } from '@/content/explanations';
-import { computeHighlights, createEmptyHighlights } from '@/lib/highlight';
+import { computeHighlights, createEmptyHighlights, selectionTint } from '@/lib/highlight';
 import { positionAt } from '@/lib/positions';
 import { useWorkspaceStore } from '@/lib/store';
-import type { Symbol } from '@/lib/compiler/types';
+import type { Scope, Symbol } from '@/lib/compiler/types';
 import { cn } from '@/lib/utils';
 
 function useSymbolHighlights() {
@@ -36,11 +62,251 @@ function useSymbolHighlights() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Scope tree (React Flow)
+// ---------------------------------------------------------------------------
+
+function scopeDisplay(scope: Scope, ownerName: string | null, ownerPosition: string | null): {
+  label: string;
+  subtitle: string;
+} {
+  if (scope.kind === 'global') {
+    return { label: SEMA_SCOPE_GLOBAL_LABEL, subtitle: SEMA_SCOPE_SYMBOLS_LABEL };
+  }
+  if (scope.kind === 'function') {
+    return {
+      label: semaScopeFunctionLabel(ownerName ?? '?'),
+      subtitle: ownerPosition ?? '',
+    };
+  }
+  return {
+    label: `block ${ownerPosition ?? ''}`.trim(),
+    subtitle: ownerPosition ?? '',
+  };
+}
+
+function ScopeTree({
+  selectedScopeId,
+  onSelectScope,
+}: {
+  selectedScopeId: number | null;
+  onSelectScope: (scopeId: number) => void;
+}) {
+  const result = useWorkspaceStore((state) => state.result);
+  const selection = useWorkspaceStore((state) => state.selection);
+  const select = useWorkspaceStore((state) => state.select);
+  const highlights = useSymbolHighlights();
+  const tintClass = useMemo(() => `tint-${selectionTint(selection, result)}`, [selection, result]);
+
+  const layout = useMemo(() => {
+    const table = result?.symbols;
+    const ast = result?.ast ?? null;
+    const source = result?.source ?? '';
+    if (table === null || table === undefined) return null;
+
+    const primarySymbolId = selection.kind === 'symbol' ? selection.symbolId : null;
+    const selectedScopeOfSymbol =
+      primarySymbolId === null
+        ? null
+        : (table.symbols.find((candidate) => candidate.id === primarySymbolId)?.scopeId ?? null);
+
+    const graph = new dagre.graphlib.Graph();
+    graph.setGraph({ rankdir: 'TB', nodesep: 14, ranksep: 30, marginx: 8, marginy: 8 });
+    graph.setDefaultEdgeLabel(() => ({}));
+
+    for (const scope of table.scopes) {
+      graph.setNode(`s${scope.id}`, { width: SCOPE_NODE_WIDTH, height: SCOPE_NODE_HEIGHT });
+    }
+    for (const symbol of table.symbols) {
+      graph.setNode(`y${symbol.id}`, { width: SYMBOL_NODE_WIDTH, height: SYMBOL_NODE_HEIGHT });
+    }
+    for (const scope of table.scopes) {
+      if (scope.parentId !== null) graph.setEdge(`s${scope.parentId}`, `s${scope.id}`);
+    }
+    for (const symbol of table.symbols) {
+      graph.setEdge(`s${symbol.scopeId}`, `y${symbol.id}`);
+    }
+    dagre.layout(graph);
+
+    const nodes: ScopeTreeNode[] = [];
+    for (const scope of table.scopes) {
+      const position = graph.node(`s${scope.id}`);
+      const ownerNode = ast?.nodes[scope.ownerNodeId];
+      const pos = ownerNode !== undefined ? positionAt(source, ownerNode.range.start) : null;
+      const display = scopeDisplay(
+        scope,
+        ownerNode?.name ?? null,
+        pos === null ? null : `${pos.line}:${pos.col}`,
+      );
+      const isSelectedScope = selectedScopeId === scope.id || selectedScopeOfSymbol === scope.id;
+      const hasAnySelection = primarySymbolId !== null || selectedScopeId !== null;
+      nodes.push({
+        id: `s${scope.id}`,
+        type: 'scopeNode',
+        position: {
+          x: (position?.x ?? 0) - SCOPE_NODE_WIDTH / 2,
+          y: (position?.y ?? 0) - SCOPE_NODE_HEIGHT / 2,
+        },
+        data: {
+          label: display.label,
+          subtitle: `${scope.symbolIds.length} ${SEMA_SCOPE_SYMBOL_COUNT}${display.subtitle ? ` · ${display.subtitle}` : ''}`,
+          isSelected: isSelectedScope,
+          isDimmed: hasAnySelection && !isSelectedScope,
+          onSelect: () => onSelectScope(scope.id),
+        },
+      });
+    }
+    for (const symbol of table.symbols) {
+      const position = graph.node(`y${symbol.id}`);
+      const isPrimary = primarySymbolId === symbol.id;
+      const isRelated = !isPrimary && highlights.symbolIds.has(symbol.id);
+      const hasAnySelection = primarySymbolId !== null || selectedScopeId !== null;
+      nodes.push({
+        id: `y${symbol.id}`,
+        type: 'symbolNode',
+        position: {
+          x: (position?.x ?? 0) - SYMBOL_NODE_WIDTH / 2,
+          y: (position?.y ?? 0) - SYMBOL_NODE_HEIGHT / 2,
+        },
+        data: {
+          label: symbol.name,
+          subtitle: `${symbol.kind}:${typeToString(symbol.type)}`,
+          isPrimary,
+          isRelated,
+          isDimmed: hasAnySelection && !isPrimary && !isRelated,
+          tintClass,
+          onSelect: () => select({ kind: 'symbol', symbolId: symbol.id, origin: 'stage' }),
+        },
+      });
+    }
+
+    const edges = [
+      ...table.scopes
+        .filter((scope) => scope.parentId !== null)
+        .map((scope) => ({
+          id: `es${scope.parentId}-${scope.id}`,
+          source: `s${scope.parentId}`,
+          target: `s${scope.id}`,
+          style: { stroke: 'oklch(0.7 0.08 300)' },
+        })),
+      ...table.symbols.map((symbol) => ({
+        id: `ey${symbol.scopeId}-${symbol.id}`,
+        source: `s${symbol.scopeId}`,
+        target: `y${symbol.id}`,
+        style: { stroke: 'oklch(0.75 0.05 200)' },
+      })),
+    ];
+
+    return { nodes, edges };
+  }, [result, selection, highlights, selectedScopeId, tintClass, select, onSelectScope]);
+
+  if (layout === null) {
+    return (
+      <div className="rounded-md border border-dashed border-border bg-muted/20 p-6 text-sm text-muted-foreground">
+        {SEMA_TREE_EMPTY}
+      </div>
+    );
+  }
+
+  return (
+    <ScopeTreeCanvas
+      nodes={layout.nodes}
+      edges={layout.edges}
+      label={`${SEMA_SCOPE_TREE_TITLE} — ${SEMA_TREE_LABEL}`}
+      heightClass="h-[26rem]"
+    />
+  );
+}
+
+function ScopePanel({ scopeId }: { scopeId: number | null }) {
+  const result = useWorkspaceStore((state) => state.result);
+  const select = useWorkspaceStore((state) => state.select);
+  const table = result?.symbols;
+
+  if (scopeId === null || table === null || table === undefined) {
+    return (
+      <p className="text-sm leading-6 text-muted-foreground">{SEMA_SCOPE_EMPTY_SELECTION}</p>
+    );
+  }
+  const scope = table.scopes.find((candidate) => candidate.id === scopeId);
+  if (scope === undefined) {
+    return <p className="text-sm leading-6 text-muted-foreground">{SEMA_SCOPE_EMPTY_SELECTION}</p>;
+  }
+
+  const ownerNode = result?.ast?.nodes[scope.ownerNodeId];
+  const ownerPos =
+    ownerNode !== undefined && result !== null
+      ? positionAt(result.source, ownerNode.range.start)
+      : null;
+  const parentScope = scope.parentId === null ? null : table.scopes.find((c) => c.id === scope.parentId);
+  const symbols = scope.symbolIds
+    .map((symbolId) => table.symbols[symbolId])
+    .filter((symbol): symbol is Symbol => symbol !== undefined);
+
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        {SEMA_SCOPE_LABEL}
+      </p>
+      <Badge variant="outline" className="w-fit border-violet-700/30 bg-violet-50 font-mono text-[0.7rem] text-violet-900">
+        {scope.kind}
+      </Badge>
+      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs">
+        <dt className="font-medium text-muted-foreground">{SEMA_SCOPE_KIND_LABEL}</dt>
+        <dd className="font-mono">{scope.kind}</dd>
+        <dt className="font-medium text-muted-foreground">{SEMA_SCOPE_OWNER_LABEL}</dt>
+        <dd className="font-mono">
+          {ownerNode === undefined
+            ? '—'
+            : `${ownerNode.kind}${ownerPos !== null ? ` at ${ownerPos.line}:${ownerPos.col}` : ''}`}
+        </dd>
+        <dt className="font-medium text-muted-foreground">{SEMA_SCOPE_PARENT_LABEL}</dt>
+        <dd className="font-mono">
+          {parentScope === null || parentScope === undefined
+            ? SEMA_SCOPE_NONE
+            : parentScope.kind === 'global'
+              ? SEMA_SCOPE_GLOBAL_LABEL
+              : `${parentScope.kind} #${parentScope.id}`}
+        </dd>
+      </dl>
+      <p className="text-xs font-medium text-muted-foreground">
+        {SEMA_SCOPE_SYMBOLS_LABEL} ({symbols.length})
+      </p>
+      {symbols.length === 0 ? (
+        <p className="text-xs leading-5 text-muted-foreground">{SEMA_EMPTY_TABLE}</p>
+      ) : (
+        <ul className="flex flex-col gap-1">
+          {symbols.map((symbol) => (
+            <li key={symbol.id}>
+              <button
+                type="button"
+                onClick={() => select({ kind: 'symbol', symbolId: symbol.id, origin: 'stage' })}
+                className="flex w-full items-center gap-2 rounded border border-border bg-muted/20 px-2 py-1 text-left text-xs transition-colors hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                <code className="font-mono font-medium">{symbol.name}</code>
+                <span className="text-muted-foreground">{symbol.kind}</span>
+                <span className="ml-auto font-mono text-muted-foreground">
+                  {typeToString(symbol.type)}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Symbol table rows
+// ---------------------------------------------------------------------------
+
 function SymbolRow({ symbol }: { symbol: Symbol }) {
   const result = useWorkspaceStore((state) => state.result);
   const selection = useWorkspaceStore((state) => state.selection);
   const select = useWorkspaceStore((state) => state.select);
   const highlights = useSymbolHighlights();
+  const tintClass = useMemo(() => `tint-${selectionTint(selection, result)}`, [selection, result]);
 
   const isPrimary = selection.kind === 'symbol' && selection.symbolId === symbol.id;
   const isRelated = !isPrimary && highlights.symbolIds.has(symbol.id);
@@ -58,8 +324,8 @@ function SymbolRow({ symbol }: { symbol: Symbol }) {
       onClick={() => select({ kind: 'symbol', symbolId: symbol.id, origin: 'stage' })}
       className={cn(
         'grid w-full grid-cols-[minmax(5rem,1fr)_minmax(4.5rem,6rem)_minmax(3rem,4rem)_minmax(4rem,5rem)_3rem] items-center gap-2 border-b border-border/60 px-2 py-1.5 text-left text-sm transition-colors last:border-b-0 hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
-        isPrimary && 'bg-amber-100 font-semibold outline outline-2 -outline-offset-2 outline-amber-700',
-        isRelated && 'bg-sky-50 underline decoration-dashed decoration-sky-700/70 underline-offset-2',
+        isPrimary && cn('sel-primary', tintClass),
+        isRelated && 'sel-related',
       )}
     >
       <code className="truncate font-mono text-[0.85rem]" title={symbol.name}>
@@ -82,12 +348,14 @@ function SymbolRow({ symbol }: { symbol: Symbol }) {
 }
 
 /**
- * Semantic view (§8): the symbol table plus the shared diagnostics list.
- * Rows are buttons; clicking a row selects the symbol, which highlights its
+ * Semantic view (§8): a clickable scope tree (React Flow) plus the symbol
+ * table and the shared diagnostics list. Selecting a symbol highlights its
  * declaration and every use across stages.
  */
 export function SemanticView() {
   const result = useWorkspaceStore((state) => state.result);
+  const [mode, setMode] = useState<'tree' | 'table'>('tree');
+  const [selectedScopeId, setSelectedScopeId] = useState<number | null>(null);
 
   const symbols = result?.symbols?.symbols ?? null;
   const diagnostics = result?.diagnostics ?? [];
@@ -113,11 +381,27 @@ export function SemanticView() {
               warnings
             </Badge>
           ) : null}
+          <div role="group" aria-label={SEMA_VIEW_MODE_LABEL} className="ml-auto flex gap-1">
+            <Button
+              type="button"
+              size="sm"
+              variant={mode === 'tree' ? 'default' : 'outline'}
+              aria-pressed={mode === 'tree'}
+              onClick={() => setMode('tree')}
+            >
+              {SEMA_TREE_LABEL}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={mode === 'table' ? 'default' : 'outline'}
+              aria-pressed={mode === 'table'}
+              onClick={() => setMode('table')}
+            >
+              {SEMA_TABLE_LABEL}
+            </Button>
+          </div>
         </div>
-
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          {SEMA_SYMBOL_TABLE_TITLE}
-        </h3>
 
         {result === null ? (
           <div className="rounded-md border border-dashed border-border bg-muted/20 p-6 text-sm text-muted-foreground">
@@ -128,12 +412,33 @@ export function SemanticView() {
             <ShieldCheck aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
             <p className="text-sm leading-6 text-muted-foreground">{SEMA_BLOCKED}</p>
           </div>
+        ) : mode === 'tree' ? (
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_16rem]">
+            <div className="min-w-0">
+              <ScopeTree
+                selectedScopeId={selectedScopeId}
+                onSelectScope={setSelectedScopeId}
+              />
+            </div>
+            <aside
+              aria-label={SEMA_SCOPE_TREE_TITLE}
+              className="rounded-md border border-border bg-background p-3"
+            >
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                {SEMA_SCOPE_TREE_TITLE}
+              </h3>
+              <ScopePanel scopeId={selectedScopeId} />
+            </aside>
+          </div>
         ) : symbols.length === 0 ? (
           <div className="rounded-md border border-dashed border-border bg-muted/20 p-6 text-sm text-muted-foreground">
             {SEMA_EMPTY_TABLE}
           </div>
         ) : (
-          <div className="overflow-hidden rounded-md border border-border">
+          <div
+            aria-label={SEMA_SYMBOL_TABLE_TITLE}
+            className="overflow-hidden rounded-md border border-border"
+          >
             <div
               aria-hidden="true"
               className="grid grid-cols-[minmax(5rem,1fr)_minmax(4.5rem,6rem)_minmax(3rem,4rem)_minmax(4rem,5rem)_3rem] gap-2 border-b border-border bg-muted/50 px-2 py-1.5 text-[0.7rem] font-semibold uppercase tracking-wide text-muted-foreground"
@@ -152,7 +457,11 @@ export function SemanticView() {
           </div>
         )}
 
-        {symbols !== null && symbols.length > 0 ? (
+        {mode === 'tree' && symbols !== null && symbols.length > 0 ? (
+          <p className="text-xs leading-5 text-muted-foreground">{SEMA_SCOPE_TREE_HINT}</p>
+        ) : null}
+
+        {mode === 'table' && symbols !== null && symbols.length > 0 ? (
           <p className="text-xs leading-5 text-muted-foreground">{SEMA_USES_HINT}</p>
         ) : null}
 

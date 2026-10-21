@@ -9,7 +9,9 @@ import {
   Cpu,
   FileCode2,
   GitBranch,
+  Gauge,
   RotateCcw,
+  Timer,
   TriangleAlert,
   Workflow,
   type LucideIcon,
@@ -29,6 +31,7 @@ const STAGE_ICONS: Record<Stage, LucideIcon> = {
   sema: CircleCheck,
   ir: Workflow,
   asm: Cpu,
+  sim: Gauge,
 };
 
 const STATUS_META: Record<NavigatorStatus, { label: string; icon: LucideIcon }> = {
@@ -38,6 +41,7 @@ const STATUS_META: Record<NavigatorStatus, { label: string; icon: LucideIcon }> 
   failed: { label: 'Failed', icon: CircleX },
   blocked: { label: 'Blocked', icon: CircleSlash },
   stale: { label: 'Stale', icon: RotateCcw },
+  pending: { label: 'Pending', icon: Timer },
 };
 
 export function StageNavigator() {
@@ -45,6 +49,8 @@ export function StageNavigator() {
   const result = useWorkspaceStore((state) => state.result);
   const stale = useWorkspaceStore((state) => state.stale);
   const setActiveStage = useWorkspaceStore((state) => state.setActiveStage);
+  const stepMode = useWorkspaceStore((state) => state.stepMode);
+  const stepReached = useWorkspaceStore((state) => state.stepReached);
 
   return (
     <nav aria-label="Compiler stages" className="w-full">
@@ -52,31 +58,23 @@ export function StageNavigator() {
         {STAGE_ORDER.map((stage, index) => {
           const stageMeta = STAGE_EXPLANATIONS[stage];
           const StageIcon = STAGE_ICONS[stage];
-          const status = deriveStageStatus(stage, result, stale);
+          const status = deriveStageStatus(stage, result, stale, stepMode ? stepReached : null);
           const statusMeta = STATUS_META[status];
-          const isAsm = stage === 'asm';
           const isActive = activeStage === stage;
-          const statusLabel = isAsm ? 'Coming soon' : statusMeta.label;
-          const StatusIcon = isAsm ? CircleSlash : statusMeta.icon;
 
           return (
             <li key={stage} className="flex min-w-[9.5rem] flex-1">
               <button
                 type="button"
                 onClick={() => setActiveStage(stage)}
-                disabled={isAsm}
                 aria-current={isActive ? 'step' : undefined}
-                aria-label={
-                  isAsm
-                    ? `${stageMeta.label}: coming soon`
-                    : `${stageMeta.label}: ${statusLabel}`
-                }
+                aria-label={`${stageMeta.label}: ${statusMeta.label}`}
                 className={cn(
                   'flex w-full flex-col gap-2 rounded-md border p-3 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
                   isActive
-                    ? 'border-foreground/60 bg-background shadow-sm'
+                    ? 'border-violet-400 bg-violet-50/70 shadow-sm'
                     : 'border-border bg-background/70 hover:bg-muted/60',
-                  isAsm && 'cursor-not-allowed opacity-60 hover:bg-background/70',
+                  status === 'pending' && !isActive && 'opacity-75',
                 )}
               >
                 <span className="flex items-center gap-2">
@@ -85,8 +83,8 @@ export function StageNavigator() {
                     {index + 1}
                   </span>
                   <span className="ml-auto inline-flex items-center gap-1 text-[0.7rem] font-medium text-muted-foreground">
-                    <StatusIcon aria-hidden="true" className="size-3.5" />
-                    {statusLabel}
+                    <statusMeta.icon aria-hidden="true" className="size-3.5" />
+                    {statusMeta.label}
                   </span>
                 </span>
                 <span className="text-sm font-semibold leading-5">

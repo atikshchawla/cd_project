@@ -13,7 +13,7 @@ import {
   STAGE_EXPLANATIONS,
 } from '@/content/explanations';
 import { getExampleById } from '@/content/examples';
-import { computeHighlights, createEmptyHighlights } from '@/lib/highlight';
+import { computeHighlights, createEmptyHighlights, selectionTint } from '@/lib/highlight';
 import { useWorkspaceStore } from '@/lib/store';
 import { sourceTooLarge } from '@/lib/status';
 import type { Range } from '@/lib/compiler/types';
@@ -84,6 +84,8 @@ export function EditorPanel() {
     [selection, result, stale],
   );
 
+  const tintClass = useMemo(() => `tint-${selectionTint(selection, result)}`, [selection, result]);
+
   const handleSourceSelection = useCallback(
     (range: Range) => {
       select({ kind: 'source', range, origin: 'editor' });
@@ -133,6 +135,7 @@ export function EditorPanel() {
         diagnostics={result?.diagnostics}
         selectionOrigin={selection.kind === 'none' ? 'stage' : selection.origin}
         stale={stale}
+        tintClass={tintClass}
       />
 
       <ProblemsBar />

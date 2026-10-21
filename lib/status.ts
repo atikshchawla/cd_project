@@ -1,7 +1,8 @@
 import type { CompileResult, Stage } from '@/lib/compiler/types';
 import { SOURCE_LIMIT_CHARS, SOURCE_LIMIT_LINES } from '@/content/explanations';
+import { PIPELINE_STAGES } from '@/lib/compiler';
 
-export type StageStatus = 'ready' | 'ok' | 'warnings' | 'failed' | 'blocked' | 'stale';
+export type StageStatus = 'ready' | 'ok' | 'warnings' | 'failed' | 'blocked' | 'stale' | 'pending';
 
 /** Whether the source exceeds the visualizer's size cap (§8 robustness). */
 export function sourceTooLarge(source: string): boolean {
@@ -10,16 +11,34 @@ export function sourceTooLarge(source: string): boolean {
   return lines > SOURCE_LIMIT_LINES;
 }
 
-/** Stage status rules from the spec (§8). */
+/**
+ * Stage status rules from the spec (§8), extended for the execution stage and
+ * step-through mode: a stage the stepper has not reached yet is `pending`
+ * unless an earlier stage failed (then it is `blocked`).
+ */
 export function deriveStageStatus(
   stage: Stage,
   result: CompileResult | null,
   stale: boolean,
+  stepReached?: Stage | null,
 ): StageStatus {
-  if (stage === 'asm') return 'blocked'; // "Coming soon": always unavailable
   if (result === null) return 'ready';
   if (stage === 'source') return 'ok';
   if (stale) return 'stale';
+
+  if (stepReached !== undefined && stepReached !== null) {
+    const reachedIndex = PIPELINE_STAGES.indexOf(stepReached);
+    const stageIndex = PIPELINE_STAGES.indexOf(stage);
+    if (stageIndex > reachedIndex && stageIndex !== -1) {
+      const earlierFailed = PIPELINE_STAGES.slice(0, stageIndex).some(
+        (candidate) => result.completed[candidate] === 'failed',
+      );
+      // Pending only for stages that simply have not run yet; a stage that
+      // reported a failure keeps its `failed` status.
+      if (!earlierFailed && result.completed[stage] !== 'failed') return 'pending';
+    }
+  }
+
   return result.completed[stage];
 }
 
