@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { ProvenanceBadge } from '@/components/shell/ProvenanceBadge';
+import { scrollWithinBox } from '@/components/common/scrollWithinBox';
 import {
   ASM_ALL_FUNCTIONS,
   ASM_BLOCKED,
@@ -114,6 +115,7 @@ export function AssemblyView() {
   const [functionFilter, setFunctionFilter] = useState<string>('all');
   const [copied, setCopied] = useState(false);
   const rowRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const listRef = useRef<HTMLDivElement | null>(null);
 
   const highlights = useMemo(
     () => (stale ? createEmptyHighlights() : computeHighlights(selection, result)),
@@ -143,7 +145,8 @@ export function AssemblyView() {
   useEffect(() => {
     if (stale || selection.kind !== 'asm' || selection.origin !== 'editor') return;
     const index = visibleLines.findIndex((line) => line.lineNo === selection.lineId);
-    if (index >= 0) rowRefs.current[index]?.scrollIntoView({ block: 'nearest' });
+    if (index < 0) return;
+    scrollWithinBox(listRef.current, rowRefs.current[index] ?? null);
   }, [stale, selection, visibleLines]);
 
   const focusRow = (index: number) => {
@@ -245,7 +248,10 @@ export function AssemblyView() {
         </div>
       ) : (
         <div className="overflow-hidden rounded-md border border-border">
-          <div className="max-h-[26rem] overflow-auto bg-background font-mono text-[0.8rem] leading-6">
+          <div
+            ref={listRef}
+            className="max-h-[26rem] overflow-auto bg-background font-mono text-[0.8rem] leading-6"
+          >
             {visibleLines.map((line, index) => {
               const isPrimary = selectedLineNo === line.lineNo;
               const isRelated =

@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { ProvenanceBadge } from '@/components/shell/ProvenanceBadge';
+import { scrollWithinBox } from '@/components/common/scrollWithinBox';
 import {
   STALE_SELECTION_NOTE,
   TOKEN_COUNT_LABEL,
@@ -57,6 +58,7 @@ export function TokenExplorer() {
 
   const [kindFilter, setKindFilter] = useState<KindFilter>('all');
   const rowRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const tableRef = useRef<HTMLDivElement | null>(null);
 
   const tokens = result?.tokens ?? EMPTY_TOKENS;
   const filteredTokens = useMemo(
@@ -77,9 +79,8 @@ export function TokenExplorer() {
   useEffect(() => {
     if (stale || selection.kind !== 'source' || selection.origin !== 'editor') return;
     const index = visibleTokens.findIndex((token) => highlights.tokenIds.has(token.id));
-    if (index >= 0) {
-      rowRefs.current[index]?.scrollIntoView({ block: 'nearest' });
-    }
+    if (index < 0) return;
+    scrollWithinBox(tableRef.current, rowRefs.current[index] ?? null);
   }, [stale, selection, visibleTokens, highlights]);
 
   const focusRow = (index: number) => {
@@ -169,7 +170,7 @@ export function TokenExplorer() {
             <span>Line:col</span>
             <span className="text-right">Length</span>
           </div>
-          <div className="max-h-[28rem] overflow-y-auto">
+          <div ref={tableRef} className="max-h-[28rem] overflow-y-auto">
             {visibleTokens.map((token, index) => {
               const kindMeta = TOKEN_KIND_EXPLANATIONS[token.kind];
               const KindIcon = KIND_ICONS[token.kind];

@@ -115,14 +115,18 @@ export function AppShell() {
         <main className="min-h-0 flex-1">
           <ResizablePanes
             left={
-              <div className="flex h-full min-h-0 flex-col overflow-y-auto p-3">
+              <div className="h-full min-h-0 overflow-y-auto p-3">
                 <EditorPanel />
               </div>
             }
             right={
-              <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3">
-                <StageWorkspace />
-                <ExplanationPanel />
+              <div className="flex h-full min-h-0 flex-col gap-3 p-3">
+                <div className="min-h-0 flex-1 overflow-y-auto">
+                  <StageWorkspace />
+                </div>
+                <div className="max-h-[45%] shrink-0 overflow-y-auto">
+                  <ExplanationPanel />
+                </div>
               </div>
             }
           />

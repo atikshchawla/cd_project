@@ -1,8 +1,8 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { useCallback, useMemo } from 'react';
-import { ArrowRight, BookOpen, TriangleAlert } from 'lucide-react';
+import { useCallback, useMemo, useState } from 'react';
+import { ArrowRight, BookOpen, TriangleAlert, X } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ProblemsBar } from '@/components/editor/ProblemsBar';
@@ -31,8 +31,11 @@ function ExampleGuidance() {
   const exampleId = useWorkspaceStore((state) => state.exampleId);
   const setActiveStage = useWorkspaceStore((state) => state.setActiveStage);
   const example = getExampleById(exampleId);
+  // Temporary dismissal: tied to the example that was showing, so loading a
+  // different example (or reloading the page) brings the card back.
+  const [dismissedId, setDismissedId] = useState<string | null>(null);
 
-  if (example === null) return null;
+  if (example === null || dismissedId === example.id) return null;
   const suggestedStage = STAGE_EXPLANATIONS[example.suggestedStage];
 
   return (
@@ -46,6 +49,17 @@ function ExampleGuidance() {
         <Badge variant="outline" className="border-sky-700/30 bg-surface/60 text-sky-900">
           {example.category === 'learn' ? 'Learn' : 'Error'}
         </Badge>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="ml-auto h-7 w-7 p-0 text-sky-900 hover:bg-sky-100 hover:text-sky-950"
+          aria-label="Hide this example guidance"
+          title="Hide until another example is loaded"
+          onClick={() => setDismissedId(example.id)}
+        >
+          <X aria-hidden="true" />
+        </Button>
       </div>
       <p className="text-xs leading-5 text-sky-950">{example.objective}</p>
       <div className="flex flex-wrap items-center gap-1 text-xs text-sky-900">

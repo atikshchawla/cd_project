@@ -1,8 +1,9 @@
 'use client';
 
-import { useMemo } from 'react';
-import { MousePointer2 } from 'lucide-react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { ChevronDown, ChevronRight, MousePointer2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import {
   AST_KIND_EXPLANATIONS,
   AST_NODE_NOT_FOUND,
@@ -28,6 +29,26 @@ import { ProvenanceBadge } from '@/components/shell/ProvenanceBadge';
 import { computeHighlights, createEmptyHighlights } from '@/lib/highlight';
 import { positionAt } from '@/lib/positions';
 import { useWorkspaceStore, type Selection } from '@/lib/store';
+import { cn } from '@/lib/utils';
+
+const MINIMISED_KEY = 'minic-explanation-min';
+
+function readStoredMinimised(): boolean {
+  try {
+    return window.localStorage.getItem(MINIMISED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function subscribeToMinimised(onStoreChange: () => void): () => void {
+  window.addEventListener('storage', onStoreChange);
+  return () => window.removeEventListener('storage', onStoreChange);
+}
+
+function getServerMinimisedSnapshot(): boolean {
+  return false;
+}
 
 function selectionLabel(selection: Selection): string {
   switch (selection.kind) {
@@ -367,6 +388,22 @@ export function ExplanationPanel() {
   const stale = useWorkspaceStore((state) => state.stale);
   const stage = STAGE_EXPLANATIONS[activeStage];
 
+  const storedMinimised = useSyncExternalStore(
+    subscribeToMinimised,
+    readStoredMinimised,
+    getServerMinimisedSnapshot,
+  );
+  const [minimisedOverride, setMinimisedOverride] = useState<boolean | null>(null);
+  const minimised = minimisedOverride ?? storedMinimised;
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(MINIMISED_KEY, minimised ? '1' : '0');
+    } catch {
+      // Private mode: the preference is session-only.
+    }
+  }, [minimised]);
+
   const highlights = useMemo(
     () => (stale ? createEmptyHighlights() : computeHighlights(selection, result)),
     [selection, result, stale],
@@ -375,90 +412,113 @@ export function ExplanationPanel() {
   return (
     <aside
       aria-label="Explanation panel"
-      className="flex flex-col gap-4 rounded-md border border-border bg-background p-4"
+      className="rounded-md border border-border bg-background"
     >
-      <div className="flex flex-col gap-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <h2 className="text-sm font-semibold">Understanding {stage.label}</h2>
-          <ProvenanceBadge kind="illustrative" />
-        </div>
+      <header className="sticky top-0 z-10 flex items-center gap-2 rounded-t-md border-b border-border bg-background px-3 py-2">
+        <h2 className="min-w-0 truncate text-sm font-semibold">
+          Understanding {stage.label}
+        </h2>
+        <ProvenanceBadge kind="illustrative" />
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="ml-auto h-7 shrink-0"
+          aria-expanded={!minimised}
+          aria-controls="explanation-panel-body"
+          title={minimised ? 'Expand the explanation panel' : 'Minimise the explanation panel'}
+          onClick={() => setMinimisedOverride(!minimised)}
+        >
+          {minimised ? (
+            <ChevronRight aria-hidden="true" />
+          ) : (
+            <ChevronDown aria-hidden="true" />
+          )}
+          {minimised ? 'Expand' : 'Minimise'}
+        </Button>
+      </header>
+
+      <div
+        id="explanation-panel-body"
+        className={cn('flex flex-col gap-4 p-4', minimised && 'hidden')}
+      >
         <p className="text-xs text-muted-foreground">
           Teaching notes for this stage. The selected item is explained separately below.
         </p>
-      </div>
 
-      <section className="flex flex-col gap-1">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Simple explanation
-        </h3>
-        <p className="text-sm leading-6">{stage.simple}</p>
-      </section>
-
-      <section className="flex flex-col gap-1">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Technical explanation
-        </h3>
-        <p className="text-sm leading-6 text-foreground/90">{stage.technical}</p>
-      </section>
-
-      <details className="group rounded-md border border-border bg-muted/30 px-3 py-2">
-        <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-wide text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring">
-          Why it matters
-          <span aria-hidden="true" className="ml-1 text-muted-foreground group-open:hidden">
-            +
-          </span>
-          <span aria-hidden="true" className="ml-1 hidden text-muted-foreground group-open:inline">
-            −
-          </span>
-        </summary>
-        <p className="pt-2 text-sm leading-6">{stage.whyItMatters}</p>
-      </details>
-
-      <section className="flex flex-col gap-1.5 rounded-md border border-border p-3">
-        <div className="flex flex-wrap items-center gap-2">
+        <section className="flex flex-col gap-1">
           <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Selected item
+            Simple explanation
           </h3>
-          <ProvenanceBadge kind="derived" />
-        </div>
-        {selection.kind === 'none' ? (
-          <p className="flex items-start gap-2 text-sm leading-6 text-muted-foreground">
-            <MousePointer2 aria-hidden="true" className="mt-1 size-4 shrink-0" />
-            {NOTHING_SELECTED}
-          </p>
-        ) : (
-          <div className="flex flex-col gap-2">
-            <Badge variant="outline" className="w-fit font-mono text-[0.7rem]">
-              {selectionLabel(selection)}
-            </Badge>
-            {stale ? (
-              <p className="text-sm leading-6 text-amber-900">{STALE_SELECTION_NOTE}</p>
-            ) : highlights.unavailable !== undefined ? (
-              <p className="text-sm leading-6 text-muted-foreground">
-                {highlights.unavailable}
-              </p>
-            ) : selection.kind === 'token' ? (
-              <TokenDetail tokenId={selection.tokenId} />
-            ) : selection.kind === 'source' ? (
-              <SourceDetail selection={selection} />
-            ) : selection.kind === 'ast' ? (
-              <AstDetail nodeId={selection.nodeId} />
-            ) : selection.kind === 'symbol' ? (
-              <SymbolDetail symbolId={selection.symbolId} />
-            ) : selection.kind === 'ir' ? (
-              <IrDetail instrId={selection.instrId} />
-            ) : selection.kind === 'asm' ? (
-              <AsmDetail lineId={selection.lineId} />
-            ) : selection.kind === 'diagnostic' ? (
-              <DiagnosticDetail diagnosticId={selection.diagnosticId} />
-            ) : (
-              <p className="text-sm leading-6 text-muted-foreground">
-                {SELECTION_DETAILS_PENDING}
-              </p>
-            )}
+          <p className="text-sm leading-6">{stage.simple}</p>
+        </section>
+
+        <section className="flex flex-col gap-1">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Technical explanation
+          </h3>
+          <p className="text-sm leading-6 text-foreground/90">{stage.technical}</p>
+        </section>
+
+        <details className="group rounded-md border border-border bg-muted/30 px-3 py-2">
+          <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-wide text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            Why it matters
+            <span aria-hidden="true" className="ml-1 text-muted-foreground group-open:hidden">
+              +
+            </span>
+            <span aria-hidden="true" className="ml-1 hidden text-muted-foreground group-open:inline">
+              −
+            </span>
+          </summary>
+          <p className="pt-2 text-sm leading-6">{stage.whyItMatters}</p>
+        </details>
+
+        <section className="flex flex-col gap-1.5 rounded-md border border-border p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Selected item
+            </h3>
+            <ProvenanceBadge kind="derived" />
           </div>
-        )}
-      </section>
+          {selection.kind === 'none' ? (
+            <p className="flex items-start gap-2 text-sm leading-6 text-muted-foreground">
+              <MousePointer2 aria-hidden="true" className="mt-1 size-4 shrink-0" />
+              {NOTHING_SELECTED}
+            </p>
+          ) : (
+            <div className="flex flex-col gap-2">
+              <Badge variant="outline" className="w-fit font-mono text-[0.7rem]">
+                {selectionLabel(selection)}
+              </Badge>
+              {stale ? (
+                <p className="text-sm leading-6 text-amber-900">{STALE_SELECTION_NOTE}</p>
+              ) : highlights.unavailable !== undefined ? (
+                <p className="text-sm leading-6 text-muted-foreground">
+                  {highlights.unavailable}
+                </p>
+              ) : selection.kind === 'token' ? (
+                <TokenDetail tokenId={selection.tokenId} />
+              ) : selection.kind === 'source' ? (
+                <SourceDetail selection={selection} />
+              ) : selection.kind === 'ast' ? (
+                <AstDetail nodeId={selection.nodeId} />
+              ) : selection.kind === 'symbol' ? (
+                <SymbolDetail symbolId={selection.symbolId} />
+              ) : selection.kind === 'ir' ? (
+                <IrDetail instrId={selection.instrId} />
+              ) : selection.kind === 'asm' ? (
+                <AsmDetail lineId={selection.lineId} />
+              ) : selection.kind === 'diagnostic' ? (
+                <DiagnosticDetail diagnosticId={selection.diagnosticId} />
+              ) : (
+                <p className="text-sm leading-6 text-muted-foreground">
+                  {SELECTION_DETAILS_PENDING}
+                </p>
+              )}
+            </div>
+          )}
+        </section>
+      </div>
     </aside>
   );
 }

@@ -14,6 +14,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ProvenanceBadge } from '@/components/shell/ProvenanceBadge';
+import { scrollWithinBox } from '@/components/common/scrollWithinBox';
 import {
   EXEC_BLOCKED,
   EXEC_CURRENT_INSTRUCTION,
@@ -249,6 +250,7 @@ export function ExecView() {
   const [playing, setPlaying] = useState(false);
   const [trackedSimulation, setTrackedSimulation] = useState(simulation);
   const traceRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const traceRef = useRef<HTMLDivElement | null>(null);
 
   // A new compile produces a new trace: rewind to its first step.
   if (trackedSimulation !== simulation) {
@@ -275,7 +277,7 @@ export function ExecView() {
   }, [playing, clampedIndex, totalSteps, simulation]);
 
   useEffect(() => {
-    traceRefs.current[clampedIndex]?.scrollIntoView({ block: 'nearest' });
+    scrollWithinBox(traceRef.current, traceRefs.current[clampedIndex] ?? null);
   }, [clampedIndex]);
 
   if (result === null) {
@@ -472,7 +474,10 @@ export function ExecView() {
               {EXEC_TRACE_EMPTY}
             </div>
           ) : (
-            <div className="max-h-[26rem] overflow-y-auto rounded-md border border-border">
+            <div
+              ref={traceRef}
+              className="max-h-[26rem] overflow-y-auto rounded-md border border-border"
+            >
               {simulation.steps.map((step) => {
                 const isCurrentStep = step.index === clampedIndex;
                 const kindTone =
