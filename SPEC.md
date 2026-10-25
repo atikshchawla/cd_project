@@ -9,9 +9,9 @@
 
 An educational website where a user picks a small C program, compiles it, and explores how it moves through compiler stages:
 
-**Source → Tokens → AST → Semantic Analysis → IR**
+**Source → Tokens → AST → Semantic Analysis → IR → Assembly → Execution (VM)**
 
-Selecting an item in one stage highlights the related items in the other stages (source, tokens, AST, IR). Invalid programs show clear diagnostics and explain which stage failed and why later stages are unavailable.
+Selecting an item in one stage highlights the related items in the other stages (source, tokens, AST, IR, assembly). Invalid programs show clear diagnostics and explain which stage failed and why later stages are unavailable.
 
 Every stage panel explains: **what is happening**, **what the compiler produces**, **why it matters**, plus an explanation of the currently selected item.
 
@@ -113,7 +113,7 @@ Everything must be JSON-serialisable: numeric IDs, no object cycles. **Keep this
 
 ```ts
 export type Range = { start: number; end: number };            // char offsets, [start, end)
-export type Stage = 'source' | 'lex' | 'parse' | 'sema' | 'ir' | 'asm';
+export type Stage = 'source' | 'lex' | 'parse' | 'sema' | 'ir' | 'asm' | 'sim';
 
 export interface Diagnostic {
   id: number; severity: 'error' | 'warning' | 'note';
@@ -172,13 +172,20 @@ export interface IRFunction { name: string; ret: IRType; params: { name: string;
 export interface IRModule { functions: IRFunction[]; blocks: Record<number, IRBlock>; instrs: Record<number, IRInstr> }
 export interface IRLine { lineNo: number; text: string; instrId?: number; blockId?: number; funcName?: string }
 
+export type AsmLineKind = 'directive' | 'label' | 'instruction' | 'comment';
+export interface AsmLine {
+  lineNo: number; text: string; kind: AsmLineKind;
+  irInstrId?: number; funcName?: string;
+}
+export interface AsmModule { lines: AsmLine[] }
+
 export interface CompileResult {
   sourceHash: string; source: string;                  // source = normalised (LF only)
   tokens: Token[]; ast: Ast | null;
   symbols: { symbols: Symbol[]; scopes: Scope[] } | null;
   diagnostics: Diagnostic[];
   ir: { module: IRModule; lines: IRLine[] } | null;
-  asm: null;                                           // reserved for a later milestone
+  asm: AsmModule | null;                               // naive x86-64 text lowered from the IR
   completed: Record<Stage, 'ok' | 'warnings' | 'failed' | 'blocked'>;
   meta: { compilerVersion: string; target: string; flags: string[]; elapsedMs: number };
 }
@@ -263,9 +270,10 @@ type Selection =
   | { kind: 'ast'; nodeId: number; origin: Origin }
   | { kind: 'symbol'; symbolId: number; origin: Origin }
   | { kind: 'ir'; instrId: number; origin: Origin }
+  | { kind: 'asm'; lineId: number; origin: Origin }
   | { kind: 'diagnostic'; diagnosticId: number; origin: Origin };
 ```
-(Add more kinds later: `irblock`, `asm`, `sim`.) One selection at a time; it **persists when switching stages**.
+(Add more kinds later: `irblock`, `sim`.) One selection at a time; it **persists when switching stages**.
 
 ### 7.2 `computeHighlights(selection, result): Highlights` (pure, in `lib/highlight.ts`)
 ```ts
@@ -307,19 +315,19 @@ If there is no `astNodeId` / mapping (e.g. a `define` line, a label, scaffolding
 
 **Settings strip:** `Mini-C compiler v0.1 · IR style: LLVM-like (opaque pointers) · optimisation: none`.
 
-**Provenance badges** (`<ProvenanceBadge kind>`): `generated` (tokens, AST, symbols, diagnostics, IR), `derived` (explanations built from generated data), `illustrative` (hand-written teaching notes). An About dialog and a one-line banner say: *"This app uses its own educational Mini-C compiler written in TypeScript. Its output resembles Clang/LLVM output but is not produced by Clang or LLVM."*
+**Provenance badges** (`<ProvenanceBadge kind>`): `generated` (tokens, AST, symbols, diagnostics, IR), `derived` (explanations built from generated data), `illustrative` (hand-written teaching notes, lowered assembly), `simulated` (VM execution states and traces). An About dialog and a one-line banner say: *"This app uses its own educational Mini-C compiler written in TypeScript. Its output resembles Clang/LLVM output but is not produced by Clang or LLVM."*
 
-**Stage navigator:** Source · Lexical Analysis · Syntax Analysis (AST) · Semantic Analysis · Intermediate Representation · Generated Assembly. Each step shows an icon **and** text status: `ready | ok | warnings | failed | blocked | stale`. **Generated Assembly is shown disabled with "Coming soon".**
+**Stage navigator:** Source · Lexical Analysis · Syntax Analysis (AST) · Semantic Analysis · Intermediate Representation · Generated Assembly · Execution (VM). Each step shows an icon **and** text status: `ready | ok | warnings | failed | blocked | stale`. Supports normal compilation and a step-through mode where stages advance one at a time.
 
 **Stage status rules (`status.ts`):**
-| Situation | lex | parse | sema | ir |
-|---|---|---|---|---|
-| Before first compile | ready | ready | ready | ready |
-| Lexical error | failed | blocked | blocked | blocked |
-| Syntax error | ok | failed | blocked | blocked |
-| Semantic error(s) | ok | ok | failed | blocked |
-| Warnings only | ok | ok | warnings | ok |
-| Clean | ok | ok | ok | ok |
+| Situation | lex | parse | sema | ir | asm | sim |
+|---|---|---|---|---|---|---|
+| Before first compile | ready | ready | ready | ready | ready | ready |
+| Lexical error | failed | blocked | blocked | blocked | blocked | blocked |
+| Syntax error | ok | failed | blocked | blocked | blocked | blocked |
+| Semantic error(s) | ok | ok | failed | blocked | blocked | blocked |
+| Warnings only | ok | ok | warnings | ok | ok | ok |
+| Clean | ok | ok | ok | ok | ok | ok |
 Blocked stages show: "Not available — *<Stage>* reported errors, so the compiler stopped before this stage." with a link selecting the first error. Tokens stay viewable after a parse error; the AST stays viewable (with partial info) after semantic errors.
 
 **Source / editor:** Monaco with C highlighting, line numbers, markers, a Problems bar below it (count + list). Compile via button and `Ctrl/Cmd+Enter`. Example dropdown (section 10) with a **Reset to example** button. States: empty ("Pick an example or type a program"), compiling, success, warnings, error. Size cap 20,000 chars → friendly message.
@@ -328,9 +336,15 @@ Blocked stages show: "Not available — *<Stage>* reported errors, so the compil
 
 **AST Explorer:** badge `generated`. Toggle **Graph | Outline**. Graph: React Flow + dagre top-to-bottom, `nodesDraggable={false}`, `nodesConnectable={false}`, `onlyRenderVisibleElements`, zoom/fit controls with `aria-label`s, node click selects, chevron toggles collapse (collapsed `Set<nodeId>` in component state; re-layout on change), "Expand all", "Reset view". Outline: accessible collapsible tree list. Side panel for the selected node: kind, range (line:col–line:col), type, name, child count, plain-language explanation.
 
-**Semantic view:** (a) **Symbol table**: name, kind, type, declared at, use count; row click → `symbol` selection. (b) **Diagnostics list** (shared `DiagnosticList`): severity icon + text, code, stage, `line:col`, expandable raw message/notes, a short "Why this error?" from `content/explanations.ts`; click → `diagnostic` selection. Selected expression nodes show their computed type in the explanation panel.
+**Semantic view:** (a) **Symbol table**: name, kind, type, declared at, use count; row click → `symbol` selection. (b) **Scope tree canvas (`ScopeTreeCanvas`)**: visual React Flow diagram of nested lexical scopes (global, function, block) and their declared symbols. (c) **Diagnostics list** (shared `DiagnosticList`): severity icon + text, code, stage, `line:col`, expandable raw message/notes, a short "Why this error?" from `content/explanations.ts`; click → `diagnostic` selection. Selected expression nodes show their computed type in the explanation panel.
 
 **IR view:** badge `generated`. Row-based read-only view (custom list of `<button>` rows from `IRLine[]`, **not** Monaco) with line numbers and regex syntax colouring (opcodes, `%names`, `@globals`, types, labels, numbers). Row click → `ir` selection. Function selector if several functions. "Copy IR" button. Static note: "LLVM IR is an intermediate language: not C and not machine code. Real LLVM IR for the same program can differ (metadata, attributes, `phi` nodes)." Selected-instruction panel: opcode meaning, operands (built from the `IRInstr`, not parsed from text), result name, and the source mapping or the `unavailable` reason.
+
+**Assembly view (`AssemblyView`):** badge `illustrative`. Row-based read-only view of lowered x86-64 assembly in Intel syntax. Row click → `asm` selection. Highlights the 1:1 corresponding IR instruction and source range. Includes function breakdown and "Copy Assembly" button.
+
+**Execution view (`ExecView`):** badge `simulated`. Interactive virtual machine stepping through the generated IR. Controls: Step Forward, Step Back, Run, Pause, and Reset. Visualizes the call stack (call frames, slot counts, released frames), 4-byte stack slot allocations, data segment (globals), program output, and return value. Safety bounds: maximum 5,000 steps and 100 call frames.
+
+**Shell polish:** Resizable editor and workspace split panes (`ResizablePanes`), global theme switcher (`ThemeToggle` supporting light, dark, sepia, and system), and bottom status bar (`StatusBar`).
 
 **Explanation panel (`ExplanationPanel`)** — four sections: *Simple explanation*, *Technical explanation*, *Why it matters* (static per stage, collapsible) and *Selected item* (dynamic). **All text lives in `content/explanations.ts`**, keyed by stage, `TokenKind`, `AstKind`, `IROpcode` and diagnostic `code`. Introduce terms before using them. Keep text concise.
 
@@ -364,6 +378,8 @@ Loading an example shows a small guidance card above the editor (objective, "Try
 | 4 | Sema + diagnostics + symbol table + Monaco markers + Problems bar + status/blocked/stale states | Every error example behaves as specified; symbol click highlights declaration and all uses; sema tests pass (one failing + one passing snippet per code) |
 | 5 | IR generation + printer + IR view + selected-instruction explanations | IR golden snapshot tests pass for all learning examples; every block has exactly one terminator; IR ↔ AST ↔ source highlighting works or shows `unavailable` |
 | 6 | Hardening: explanation content for every kind/opcode/code, error boundaries, limits, full example set (section 10), README (supported subset, limits, honesty model, how to run) | All tests pass; no UI text claims "Clang output"/"real LLVM IR"; every example compiles with its `expected` status |
+| 7 | Assembly generation (`lib/compiler/asmgen.ts`, `components/stages/AssemblyView.tsx`): naive x86-64 Intel syntax lowering with exact `irInstrId` mapping | `asmgen.test.ts` passes; assembly stage active with 1:1 IR line highlights |
+| 8 | Execution VM simulator (`lib/compiler/simulate.ts`, `components/stages/ExecView.tsx`): trace-first interpreter with stepping, frames, memory, globals + UX enhancements (resizable panes, themes, scope tree canvas) | `simulate.test.ts` passes; interactive step forward/back and live frame inspection; all 151 Vitest tests pass |
 
 ### Tests (Vitest, engine-level, no browser)
 `npm test` must cover: lexer (all token kinds, line/col incl. tabs and CRLF, unterminated comment, unsupported chars, literal range); parser (each production, precedence/associativity, `for` with declaration, first-error report); sema (each code, shadowing, `refDeclId`/`useNodeIds`); IR (golden snapshots, one terminator per block, `&&`/`||` shape, `break`/`continue`, statements after `return`); `computeHighlights` (each selection kind + `unavailable` cases); examples (each compiles with its `expected` status).
@@ -379,14 +395,16 @@ Loading an example shows a small guidance card above the editor (objective, "Try
 - ❌ Don't add libraries, features, or polish beyond this spec; don't build anything from section 13.
 - ✅ `compile()` is pure and total; all explanation text in `content/`; engine code testable without React; keep files small and single-purpose.
 
-## 13. Deferred — do NOT build now (design hooks already in place)
-Each can be added later as a separate task without refactoring the MVP:
+## 13. Future Extensions & Status of Deferred Items
 
+Status of previously deferred items:
+- ✅ **Assembly (Completed in Milestone 7):** Naive x86-64 (Intel syntax) from unoptimised IR where every IR value lives in a stack slot; each asm line records `irInstrId` for exact cross-stage highlighting (`lib/compiler/asmgen.ts`, `components/stages/AssemblyView.tsx`).
+- ✅ **Execution simulator (Completed in Milestone 8):** Trace-first interpreter over the unoptimised IR (`lib/compiler/simulate.ts`, `components/stages/ExecView.tsx`) with reversible stepping, call frame stacks, memory/globals visualization, and safety limits (5,000 steps / 100 depth).
+- ✅ **UI polish & themes (Completed in Milestone 8):** Resizable panes (`components/shell/ResizablePanes.tsx`), multiple themes (dark, light, sepia, system via `components/shell/ThemeToggle.tsx`), status bar, and scope tree canvas.
+
+Remaining deferred items:
 1. **CFG Explorer** — derive from IR: one node per `IRBlock`, edges from each `br` (`true`/`false` edges with different line styles and the condition name). Reuse `GraphCanvas`. Add selection kind `irblock`.
-2. **Assembly** — naive x86-64 (Intel syntax) from the unoptimised IR where every IR value lives in a stack slot; each asm line records `irInstrId` (so source ↔ IR ↔ asm mapping is exact); prologue/labels have no mapping. Fill `CompileResult.asm`; enable the navigator step; add selection kind `asm`. State clearly it is assembly text, not machine code, and is never assembled or run.
-3. **Execution simulator** — a trace-first interpreter over the unoptimised IR (record `TraceStep[]` with writes/branch/call/ret/output; step back = decrement index), limits 5,000 steps / depth 100, shared `int32.ts` arithmetic, `simulated` badge.
-4. **Optimisation before/after** — pure passes over a cloned IR module: local value forwarding, constant folding (+ branch folding), block-local CSE, dead-code elimination; diff by instruction **ID** (removed / changed / added), each change with a generated plain-language summary; badge as "this app's own passes, not LLVM's". A test must check optimised vs unoptimised IR give identical results under the interpreter.
-5. **Simplified AST view** (derived, labelled as an educational view), focus-subtree, minimap, auto-switch to Outline for very large trees.
-6. **Example library UI** (topics/difficulty), **Visual Error Explorer** as dedicated screens.
-7. **Language growth:** `char`/`printf`/string literals, `do-while`, then arrays and pointers (types already allow extension).
-8. Dark mode, resizable panes, mobile polish, focus mode.
+2. **Optimisation before/after** — pure passes over a cloned IR module: local value forwarding, constant folding (+ branch folding), block-local CSE, dead-code elimination; diff by instruction **ID** (removed / changed / added), each change with a generated plain-language summary; badge as "this app's own passes, not LLVM's". A test must check optimised vs unoptimised IR give identical results under the interpreter.
+3. **Simplified AST view** (derived, labelled as an educational view), focus-subtree, minimap, auto-switch to Outline for very large trees.
+4. **Example library UI** (topics/difficulty), **Visual Error Explorer** as dedicated screens.
+5. **Language growth:** `char`/`printf`/string literals, `do-while`, then arrays and pointers (types already allow extension).

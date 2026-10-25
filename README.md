@@ -1,11 +1,11 @@
 # Mini-C Compiler Visualizer
 
 An educational Next.js app for exploring how a small C-like program ("Mini-C") moves through
-compiler stages: source → tokens → AST → semantic analysis → LLVM-style IR.
+compiler stages: source → tokens → AST → semantic analysis → LLVM-style IR → x86-64 assembly → execution (VM simulation).
 
 This app uses its own educational Mini-C compiler written in TypeScript. Its output resembles
 Clang/LLVM output but is not produced by Clang or LLVM. Everything runs in the browser; user code
-is never executed.
+is never executed natively, but can be interactively simulated in a sandboxed virtual machine.
 
 ## Run
 
@@ -36,10 +36,12 @@ bundled into the app.
 2. Press **Compile**. The app runs the whole pipeline in the browser, synchronously and
    deterministically — the same source always produces the same result.
 3. Step through the stage navigator: Source, Lexical Analysis, Syntax Analysis (AST), Semantic
-   Analysis, Intermediate Representation. Generated Assembly is reserved for a later milestone and
-   shows "Coming soon".
-4. Click tokens, AST nodes, symbols, or IR instructions to see them highlighted across the editor
-   and the other stages. Selecting a diagnostic jumps to the stage that reported it.
+   Analysis, Intermediate Representation, Generated Assembly, and Execution (VM). Alternatively,
+   use step-through mode to advance the pipeline one stage at a time.
+4. Click tokens, AST nodes, symbols, IR instructions, or assembly lines to see them highlighted
+   across the editor and the other stages. Selecting a diagnostic jumps to the stage that reported it.
+5. In the Execution (VM) stage, step forward and backward or run the program to see stack frames,
+   global variables, and memory mutations change in real time.
 
 ## Supported Mini-C subset
 
@@ -62,7 +64,8 @@ strings, arrays, `#include`/preprocessor directives, and every other C construct
 - Source is capped at **20,000 characters / 800 lines**. Oversized input refuses to compile with
   a friendly message instead of freezing the tab.
 - The compiler pipeline is pure TypeScript (`lib/compiler`). It never spawns processes, never
-  calls a server, and never runs user code — it only analyses it.
+  calls a server, and never runs user code natively. The execution view is an in-browser interpreter
+  capped at 5,000 steps and 100 call frames to ensure tab safety.
 - `compile()` is total: it catches unexpected internal failures and reports them as a diagnostic
   instead of crashing the UI. Each stage view is additionally wrapped in an error boundary.
 
@@ -74,8 +77,11 @@ strings, arrays, `#include`/preprocessor directives, and every other C construct
   `icmp`/`zext`, `br`, `ret`, `call`) so it reads like real IR, but it is produced by this app's
   own generator and printer. It is not guaranteed to assemble with a real LLVM toolchain.
 - Provenance badges mark every artifact: *generated* (derived from your source), *derived* (from
-  another artifact), or *illustrative* (extra teaching content).
-- The assembly stage is intentionally disabled and marked "Coming soon" rather than faked.
+  another artifact), *illustrative* (extra teaching content), or *simulated* (derived from VM execution).
+- The assembly stage lowers the unoptimised IR to naive x86-64 assembly text (Intel syntax) with
+  exact line-to-IR mappings. It is illustrative text and is not assembled or executed natively.
+- The VM execution stage runs the IR in a trace-first interpreter with 32-bit C integer semantics,
+  recording full stack and frame states for every step.
 
 ## Diagnostics
 
@@ -93,11 +99,15 @@ IR. Blocked stages say so explicitly and link to the first error.
 
 ## Current status
 
-All planned milestones (1–6) are complete: application shell, stage navigator, About dialog,
-provenance badges, example picker, Monaco editor with cross-stage highlighting, compile flow,
-lexer, Token Explorer, parser and AST Explorer (React Flow graph + accessible outline), semantic
-analysis with a clickable symbol table, LLVM-style IR generation with a per-instruction view and
-Copy IR, per-code and per-opcode explanations, source size limits, and 12 built-in examples
-(8 learning programs and 4 that demonstrate specific errors).
-
-Generated assembly remains reserved for a later milestone.
+All 7 pipeline stages and interactive features are complete:
+- Application shell with resizable panes and theme switcher (Dark, Light, Sepia, System)
+- Pipeline stage navigator and step-through execution mode
+- Monaco code editor with cross-stage highlighting and diagnostic markers
+- 12 built-in examples (8 learning programs and 4 error demonstrations)
+- Lexer and Token Explorer (filtering, token inspector, legend)
+- Recursive-descent parser and AST Explorer (React Flow graph + accessible outline)
+- Semantic analysis with clickable symbol table, interactive Scope Tree canvas, and diagnostics
+- LLVM-style IR generation with per-instruction inspector and Copy IR
+- Naive x86-64 assembly generation with 1:1 IR line mappings and Intel syntax
+- Browser-based execution simulator (VM) with reversible stepping, call frame inspection, stack/memory visualization, and output capture
+- 151 unit and snapshot tests covering the entire pipeline
