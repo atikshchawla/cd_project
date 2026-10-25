@@ -98,6 +98,17 @@ describe('example set', () => {
     }
   });
 
+  it('suggests the stage that actually reports each error example', () => {
+    const stages = ['lex', 'parse', 'sema'] as const;
+    for (const example of EXAMPLES) {
+      if (example.expected !== 'error') continue;
+      const result = compile(example.code);
+      const firstFailed = stages.find((stage) => result.completed[stage] === 'failed');
+      expect(firstFailed, example.id).toBeDefined();
+      expect(example.suggestedStage, example.id).toBe(firstFailed);
+    }
+  });
+
   it('runs every pass an example advertises, on that example alone', () => {
     for (const example of EXAMPLES) {
       if (example.demonstrates === undefined) continue;

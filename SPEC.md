@@ -362,10 +362,13 @@ Blocked stages show: "Not available — *<Stage>* reported errors, so the compil
 ```ts
 interface Example { id: string; title: string; category: 'learn' | 'error'; objective: string;
   code: string; suggestedStage: Stage; explanation: string;
-  expected: 'success' | 'warnings' | 'error'; expectedErrorCodes?: string[] }
+  expected: 'success' | 'warnings' | 'error'; expectedErrorCodes?: string[];
+  /** Passes that must visibly change this program when run on their own. */
+  demonstrates?: OptPassId[] }
 ```
-Learning examples (all valid Mini-C, each focused on one idea): variables and arithmetic; operator precedence (`2 + 3 * 4`); if/else; while loop (sum 1..n); for loop; function with parameters and a call; recursion (factorial); short-circuit `&&`/`||`.
-Error examples: missing semicolon (`E2001`), undeclared identifier (`E3001`), wrong argument count (`E3004`) or void-value misuse (`E3003`), unused variable/missing return warning (`W4001`/`W4002`).
+Learning examples (all valid Mini-C, each focused on one idea): variables and arithmetic; operator precedence (`2 + 3 * 4`); if/else; while loop (sum 1..n); for loop; function with parameters and a call; recursion (factorial); short-circuit `&&`/`||`; local value forwarding; constant folding; branch folding; common subexpression elimination; dead-code elimination; an all-four-passes optimisation tour; globals read and written across a call; scopes and shadowing; `break`/`continue` in a `while` loop.
+Error examples: missing semicolon (`E2001`), undeclared identifier (`E3001`), wrong argument count (`E3004`), unused variable/missing return warning (`W4001`/`W4002`), unsupported character (`E1010`, the lexer fails and every later stage is blocked), reserved keyword (`E1010`, the parser refuses it), redeclaration in the same scope (`E3002`).
+An example listing `demonstrates` must suggest the Optimization stage, and a test runs each listed pass **in isolation** on that example and fails if it produces no transformation — an example can never advertise a pass it does not actually show.
 Loading an example shows a small guidance card above the editor (objective, "Try this: open <stage>", explanation) and enables **Reset to example**.
 
 ## 11. Milestones (do in order; stop after each and report)

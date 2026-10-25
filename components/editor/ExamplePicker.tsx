@@ -18,7 +18,14 @@ export function ExamplePicker() {
   const exampleId = useWorkspaceStore((state) => state.exampleId);
   const loadExample = useWorkspaceStore((state) => state.loadExample);
   const resetExample = useWorkspaceStore((state) => state.resetExample);
-  const learningExamples = EXAMPLES.filter((example) => example.category === 'learn');
+  const learningExamples = EXAMPLES.filter(
+    (example) => example.category === 'learn' && example.suggestedStage !== 'opt',
+  );
+  // The optimisation examples get their own group so the pass-by-pass demos
+  // are easy to find in a long list.
+  const optimisationExamples = EXAMPLES.filter(
+    (example) => example.category === 'learn' && example.suggestedStage === 'opt',
+  );
   const errorExamples = EXAMPLES.filter((example) => example.category === 'error');
 
   return (
@@ -40,6 +47,16 @@ export function ExamplePicker() {
             <SelectGroup>
               <SelectLabel>Learn</SelectLabel>
               {learningExamples.map((example) => (
+                <SelectItem key={example.id} value={example.id}>
+                  {example.title}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          ) : null}
+          {optimisationExamples.length > 0 ? (
+            <SelectGroup>
+              <SelectLabel>Optimisation</SelectLabel>
+              {optimisationExamples.map((example) => (
                 <SelectItem key={example.id} value={example.id}>
                   {example.title}
                 </SelectItem>

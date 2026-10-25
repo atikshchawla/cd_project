@@ -211,7 +211,7 @@ int main() {
 `,
     suggestedStage: 'opt',
     explanation:
-      'Every operand of 2 + 3 * 4, 10 - 4 / 2 and 1 < 2 is a literal, so the answer is already known. The instruction is removed and its uses read the number instead — computed with exactly the same 32-bit rules the interpreter uses, wrap-around and x / 0 included.',
+      'Every operand of 2 + 3 * 4, 10 - 4 / 2 and 1 < 2 is a literal, so the answer is already known. The instruction is removed and its uses read the number instead — produced by the same 32-bit helpers the interpreter runs, so wrapping and division behave exactly as they would at run time.',
     expected: 'success',
     demonstrates: ['folding'],
   },
@@ -275,21 +275,24 @@ int main() {
     title: 'Optimisation tour (all four passes)',
     category: 'learn',
     objective: 'Run every pass at once and watch the instruction count fall along the timeline.',
-    code: `int main() {
+    code: `int square(int n) {
+  int first = n * n;
+  int second = n * n;
+  n + 100;
+  return first + second;
+}
+
+int main() {
   int x = 5;
   int a = x;
   int b = 6 * 7;
   int c = 6 * 7;
-  if (1) {
-    c = c + 1;
-  }
-  a + b + c;
-  return x + a + b + c;
+  return square(3) + a + b + c + x;
 }
 `,
     suggestedStage: 'opt',
     explanation:
-      'One short program exercises every pass: a store forwarded into a load, two literal expressions folded, a duplicate expression merged, and a discarded computation deleted. Turn the passes off one at a time to see which transformation belongs to which, then click a transformation for its full explanation.',
+      'One short program exercises every pass at once: the reads of x and n are forwarded, the two literal expressions are folded, the duplicated multiplication is merged, and the discarded n + 100 is deleted. Switch the passes off one at a time to see which transformation belongs to which, then open a transformation for its full explanation.',
     expected: 'success',
     demonstrates: ['forwarding', 'folding', 'cse', 'dce'],
   },
@@ -439,7 +442,7 @@ int main() {
 `,
     suggestedStage: 'lex',
     explanation:
-      '@ is not part of Mini-C. The lexer reports E1010 at that exact character and fails, so parsing, semantics and IR are all blocked — the stages below stay blocked rather than guessing. The Token Explorer still shows every token scanned up to the error.',
+      '@ is not part of Mini-C. The lexer reports E1010 at that exact character and carries on, so parsing, semantics and IR are all blocked rather than guessing — while the Token Explorer still lists every token the lexer produced.',
     expected: 'error',
     expectedErrorCodes: ['E1010'],
   },

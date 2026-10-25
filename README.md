@@ -95,6 +95,11 @@ What the stage shows:
   uses instruction IDs and AST source ranges only — never text matching — and a selection that
   cannot be mapped says why instead of guessing.
 
+Six built-in examples belong to this stage — one per pass plus a tour that runs all four — and they
+are grouped under **Optimisation** in the example picker. Each declares which passes it advertises,
+and a test runs every advertised pass **on its own** against that example, failing if it produces no
+transformation, so an example can never claim a pass it does not actually show.
+
 The optimiser never mutates the compiler's own module (it works on a clone), never adds
 instructions, keeps every 32-bit wrap-around/division-by-zero rule intact, and always leaves valid
 terminators. `npm test` includes a suite that runs the whole example set through every pass subset
@@ -148,7 +153,8 @@ All 8 pipeline stages and interactive features are complete:
 - Application shell with resizable panes and theme switcher (Dark, Light, Sepia, System)
 - Pipeline stage navigator and step-through execution mode
 - Monaco code editor with cross-stage highlighting and diagnostic markers
-- 12 built-in examples (8 learning programs and 4 error demonstrations)
+- 24 built-in examples (17 learning programs and 7 error demonstrations), including six that
+  showcase the Optimization stage one pass at a time
 - Lexer and Token Explorer (filtering, token inspector, legend)
 - Recursive-descent parser and AST Explorer (React Flow graph + accessible outline)
 - Semantic analysis with clickable symbol table, interactive Scope Tree canvas, and diagnostics
@@ -159,4 +165,4 @@ All 8 pipeline stages and interactive features are complete:
 - Naive x86-64 assembly generation with 1:1 IR line mappings and Intel syntax (original or
   optimised IR)
 - Browser-based execution simulator (VM) with reversible stepping, call frame inspection, stack/memory visualization, and output capture (original or optimised IR)
-- 187 unit and snapshot tests covering the entire pipeline
+- 191 unit and snapshot tests covering the entire pipeline
