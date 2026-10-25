@@ -26,7 +26,9 @@ import {
   typeToString,
 } from '@/content/explanations';
 import { ProvenanceBadge } from '@/components/shell/ProvenanceBadge';
+import { ChangeDetail } from '@/components/common/ChangeDetail';
 import { computeHighlights, createEmptyHighlights } from '@/lib/highlight';
+import { OPT_CHANGE_MISSING } from '@/content/optExplanations';
 import { positionAt } from '@/lib/positions';
 import { useWorkspaceStore, type Selection } from '@/lib/store';
 import { cn } from '@/lib/utils';
@@ -62,6 +64,8 @@ function selectionLabel(selection: Selection): string {
       return `symbol #${selection.symbolId}`;
     case 'ir':
       return `IR instruction #${selection.instrId}`;
+    case 'opt':
+      return `optimisation change #${selection.changeId}`;
     case 'asm':
       return `assembly line #${selection.lineId}`;
     case 'diagnostic':
@@ -256,6 +260,16 @@ function IrDetail({ instrId }: { instrId: number }) {
   );
 }
 
+function OptDetail({ changeId }: { changeId: number }) {
+  const optimization = useWorkspaceStore((state) => state.optimization);
+  const change = optimization?.changes.find((candidate) => candidate.id === changeId);
+
+  if (change === undefined) {
+    return <p className="text-sm leading-6 text-muted-foreground">{OPT_CHANGE_MISSING}</p>;
+  }
+  return <ChangeDetail change={change} />;
+}
+
 function AsmDetail({ lineId }: { lineId: number }) {
   const result = useWorkspaceStore((state) => state.result);
   const line = result?.asm?.lines.find((candidate) => candidate.lineNo === lineId);
@@ -352,9 +366,10 @@ function DiagnosticDetail({ diagnosticId }: { diagnosticId: number }) {
 
 function SourceDetail({ selection }: { selection: Extract<Selection, { kind: 'source' }> }) {
   const result = useWorkspaceStore((state) => state.result);
+  const optimization = useWorkspaceStore((state) => state.optimization);
   const highlights = useMemo(
-    () => computeHighlights(selection, result),
-    [selection, result],
+    () => computeHighlights(selection, result, optimization),
+    [selection, result, optimization],
   );
   const tokenIds = highlights.tokenIds;
   const tokens = result?.tokens ?? [];
@@ -386,6 +401,7 @@ export function ExplanationPanel() {
   const selection = useWorkspaceStore((state) => state.selection);
   const result = useWorkspaceStore((state) => state.result);
   const stale = useWorkspaceStore((state) => state.stale);
+  const optimization = useWorkspaceStore((state) => state.optimization);
   const stage = STAGE_EXPLANATIONS[activeStage];
 
   const storedMinimised = useSyncExternalStore(
@@ -405,8 +421,8 @@ export function ExplanationPanel() {
   }, [minimised]);
 
   const highlights = useMemo(
-    () => (stale ? createEmptyHighlights() : computeHighlights(selection, result)),
-    [selection, result, stale],
+    () => (stale ? createEmptyHighlights() : computeHighlights(selection, result, optimization)),
+    [selection, result, optimization, stale],
   );
 
   return (
@@ -506,6 +522,8 @@ export function ExplanationPanel() {
                 <SymbolDetail symbolId={selection.symbolId} />
               ) : selection.kind === 'ir' ? (
                 <IrDetail instrId={selection.instrId} />
+              ) : selection.kind === 'opt' ? (
+                <OptDetail changeId={selection.changeId} />
               ) : selection.kind === 'asm' ? (
                 <AsmDetail lineId={selection.lineId} />
               ) : selection.kind === 'diagnostic' ? (

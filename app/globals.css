@@ -39,6 +39,7 @@
   --stage-ast: #6d28d9;
   --stage-semantic: #047857;
   --stage-ir: #b45309;
+  --stage-opt: #4d7c0f;
   --stage-assembly: #c2410c;
   --stage-run: #be185d;
 
@@ -90,6 +91,7 @@
   --stage-ast: #a78bfa;
   --stage-semantic: #34d399;
   --stage-ir: #fbbf24;
+  --stage-opt: #a3e635;
   --stage-assembly: #fb923c;
   --stage-run: #f472b6;
 
@@ -148,6 +150,7 @@
   --color-stage-ast: var(--stage-ast);
   --color-stage-semantic: var(--stage-semantic);
   --color-stage-ir: var(--stage-ir);
+  --color-stage-opt: var(--stage-opt);
   --color-stage-assembly: var(--stage-assembly);
   --color-stage-run: var(--stage-run);
 

@@ -8,7 +8,7 @@ export interface StageExplanation {
   whyItMatters: string;
 }
 
-export const STAGE_ORDER: Stage[] = ['source', 'lex', 'parse', 'sema', 'ir', 'asm', 'sim'];
+export const STAGE_ORDER: Stage[] = ['source', 'lex', 'parse', 'sema', 'ir', 'opt', 'asm', 'sim'];
 
 export const STAGE_EXPLANATIONS: Record<Stage, StageExplanation> = {
   source: {
@@ -61,6 +61,16 @@ export const STAGE_EXPLANATIONS: Record<Stage, StageExplanation> = {
     whyItMatters:
       'The intermediate representation sits between human-readable C and machine instructions. It is where control flow, values and data flow become explicit and checkable.',
   },
+  opt: {
+    label: 'Optimization',
+    shortLabel: 'Optimize',
+    simple:
+      'The same program can be written with fewer instructions. Four small passes rewrite a copy of the IR, and this stage shows exactly what each one changed in your program.',
+    technical:
+      'Local value forwarding, constant and branch folding, block-local common-subexpression elimination and dead-code elimination run in order on a deep clone of the IR — the IR stage keeps the original untouched. Every transformation is recorded against the instruction ID it came from and, through that instruction, against its AST node and source range, so the side-by-side view can be navigated by ID rather than by matching text.',
+    whyItMatters:
+      'Optimisation is where speed and correctness meet: every rewrite must provably mean the same thing as the code it replaced. Selecting a change connects the optimised instruction, the original instruction and the source expression that produced them.',
+  },
   asm: {
     label: 'Generated Assembly',
     shortLabel: 'Assembly',
@@ -77,7 +87,7 @@ export const STAGE_EXPLANATIONS: Record<Stage, StageExplanation> = {
     simple:
       'This stage runs the generated IR on a small simulated machine, one instruction at a time, and shows the stack, frames and memory as they change.',
     technical:
-      'A trace-first interpreter executes the unoptimised IR with 32-bit C integer semantics. Every step records a snapshot of the machine: the data segment (globals), the stack of frames with their 4-byte cells, and the current instruction. Stepping back just moves an index through the recorded trace.',
+      'A trace-first interpreter executes the selected IR — original or optimised — with 32-bit C integer semantics. Every step records a snapshot of the machine: the data segment (globals), the stack of frames with their 4-byte cells, and the current instruction. Stepping back just moves an index through the recorded trace.',
     whyItMatters:
       'Watching execution step by step makes abstract ideas concrete: frames really occupy stack space, calls really push and returns really pop, and every value really lives somewhere.',
   },

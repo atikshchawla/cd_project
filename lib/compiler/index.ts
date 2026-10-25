@@ -8,6 +8,22 @@ import { generateAsm } from './asmgen';
 import type { CompileResult, Diagnostic, Stage } from './types';
 
 export * from './types';
+export {
+  OPT_PASS_ORDER,
+  findChangeForInstruction,
+  optimizeModule,
+  verifyModule,
+} from './optimize';
+export type {
+  OptChange,
+  OptChangeFacts,
+  OptChangeKind,
+  OptPassId,
+  OptPassState,
+  OptPassStatus,
+  OptRowStatus,
+  OptimizationResult,
+} from './optimize/types';
 
 export const COMPILER_VERSION = '0.1';
 export const COMPILER_TARGET = 'Mini-C (educational)';
@@ -61,6 +77,7 @@ export function compileUpTo(source: string, upTo: Stage): CompileResult {
       parse: 'blocked',
       sema: 'blocked',
       ir: 'blocked',
+      opt: 'blocked',
       asm: 'blocked',
       sim: 'blocked',
     },
@@ -143,8 +160,9 @@ export function compileUpTo(source: string, upTo: Stage): CompileResult {
       ...afterSema,
       ir: { module: irModule, lines },
       // The execution stage interprets this IR lazily in the UI; it is
-      // available exactly when the IR is.
-      completed: { ...afterSema.completed, ir: 'ok', sim: 'ok' },
+      // available exactly when the IR is. The Optimization stage derives its
+      // output from this IR, so it opens up at the same moment.
+      completed: { ...afterSema.completed, ir: 'ok', opt: 'ok', sim: 'ok' },
     };
     if (upTo === 'ir') return afterIr;
 
@@ -161,6 +179,7 @@ export function compileUpTo(source: string, upTo: Stage): CompileResult {
         parse: 'failed',
         sema: 'blocked',
         ir: 'blocked',
+        opt: 'blocked',
         asm: 'blocked',
         sim: 'blocked',
       },

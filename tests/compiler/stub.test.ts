@@ -3,7 +3,7 @@ import { COMPILER_VERSION, compile, compileUpTo, normaliseSource } from '@/lib/c
 import type { Stage } from '@/lib/compiler/types';
 import { hashSource } from '@/lib/hash';
 
-const ALL_STAGES: Stage[] = ['source', 'lex', 'parse', 'sema', 'ir', 'asm', 'sim'];
+const ALL_STAGES: Stage[] = ['source', 'lex', 'parse', 'sema', 'ir', 'opt', 'asm', 'sim'];
 
 describe('compiler pipeline (lexer milestone)', () => {
   it('normalises CRLF and bare CR to LF', () => {
@@ -36,6 +36,7 @@ describe('compiler pipeline (lexer milestone)', () => {
       parse: 'ok',
       sema: 'ok',
       ir: 'ok',
+      opt: 'ok',
       asm: 'ok',
       sim: 'ok',
     });
@@ -59,6 +60,7 @@ describe('compiler pipeline (lexer milestone)', () => {
       parse: 'failed',
       sema: 'blocked',
       ir: 'blocked',
+      opt: 'blocked',
       asm: 'blocked',
       sim: 'blocked',
     });
@@ -75,6 +77,7 @@ describe('compiler pipeline (lexer milestone)', () => {
       expect(result.completed.parse).toBe('blocked');
       expect(result.completed.sema).toBe('blocked');
       expect(result.completed.ir).toBe('blocked');
+      expect(result.completed.opt).toBe('blocked');
       expect(result.completed.asm).toBe('blocked');
       expect(result.completed.sim).toBe('blocked');
     expect(result.diagnostics).toHaveLength(1);
@@ -90,6 +93,7 @@ describe('compiler pipeline (lexer milestone)', () => {
       parse: 'ok',
       sema: 'blocked',
       ir: 'blocked',
+      opt: 'blocked',
       asm: 'blocked',
       sim: 'blocked',
     });

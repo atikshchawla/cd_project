@@ -1,5 +1,13 @@
 import { create } from 'zustand';
-import { compile, compileUpTo, normaliseSource, PIPELINE_STAGES } from '@/lib/compiler';
+import {
+  compile,
+  compileUpTo,
+  normaliseSource,
+  optimizeModule,
+  OPT_PASS_ORDER,
+  PIPELINE_STAGES,
+} from '@/lib/compiler';
+import type { OptPassId, OptimizationResult } from '@/lib/compiler';
 import type { CompileResult, Range, Stage } from '@/lib/compiler/types';
 import { hashSource } from '@/lib/hash';
 import { getExampleById } from '@/content/examples';
@@ -14,10 +22,17 @@ export type Selection =
   | { kind: 'ast'; nodeId: number; origin: Origin }
   | { kind: 'symbol'; symbolId: number; origin: Origin }
   | { kind: 'ir'; instrId: number; origin: Origin }
+  | { kind: 'opt'; changeId: number; origin: Origin }
   | { kind: 'asm'; lineId: number; origin: Origin }
   | { kind: 'diagnostic'; diagnosticId: number; origin: Origin };
 
 // Later: 'irblock' | 'sim'.
+
+/** Which IR the Assembly and Execution stages are looking at. */
+export type IrVersion = 'original' | 'optimized';
+
+/** Default: every pass on, in the order the optimiser runs them. */
+export const DEFAULT_PASSES: OptPassId[] = [...OPT_PASS_ORDER];
 
 export type CompileStatus = 'idle' | 'compiling' | 'compiled';
 
@@ -34,6 +49,15 @@ export interface WorkspaceData {
   stepMode: boolean;
   /** The furthest pipeline stage the stepper has run (null = none yet). */
   stepReached: Stage | null;
+  /** Which optimisation passes are switched on. */
+  enabledPasses: OptPassId[];
+  /**
+   * The optimised clone of `result.ir`, recomputed whenever the source, the
+   * compilation or the pass selection changes. Null while there is no IR.
+   */
+  optimization: OptimizationResult | null;
+  /** Which IR the Assembly and Execution stages show. */
+  irVersion: IrVersion;
 }
 
 interface WorkspaceActions {
@@ -44,6 +68,10 @@ interface WorkspaceActions {
   setActiveStage: (stage: Stage) => void;
   compileSource: () => void;
   setAboutOpen: (open: boolean) => void;
+  /** Turn one optimisation pass on or off and re-optimise. */
+  toggleOptPass: (pass: OptPassId) => void;
+  /** Switch the Assembly and Execution stages between the two IR versions. */
+  setIrVersion: (version: IrVersion) => void;
   /** Enter step-through mode and run nothing yet. */
   startStepThrough: () => void;
   /** Leave step-through mode; the next Compile runs the whole pipeline. */
@@ -67,7 +95,23 @@ export const INITIAL_WORKSPACE_DATA: WorkspaceData = {
   aboutOpen: false,
   stepMode: false,
   stepReached: null,
+  enabledPasses: [...DEFAULT_PASSES],
+  optimization: null,
+  irVersion: 'original',
 };
+
+/**
+ * Optimise the current IR with a given pass selection. The compiler itself
+ * never depends on these passes — they run on a clone, in the UI layer, so
+ * re-toggling them never re-compiles the source.
+ */
+function optimiseResult(
+  result: CompileResult | null,
+  enabledPasses: OptPassId[],
+): OptimizationResult | null {
+  if (result === null || result.ir === null) return null;
+  return optimizeModule(result.ir.module, enabledPasses);
+}
 
 /** Invalidates an in-flight compile when the workspace loads different text. */
 let compileRequest = 0;
@@ -108,6 +152,8 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
       stale: false,
       stepMode: false,
       stepReached: null,
+      optimization: null,
+      irVersion: 'original',
     });
   },
 
@@ -123,6 +169,8 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
       stale: false,
       stepMode: false,
       stepReached: null,
+      optimization: null,
+      irVersion: 'original',
     });
   },
 
@@ -147,6 +195,7 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
 
     const request = ++compileRequest;
     const source = get().source;
+    const enabledPasses = get().enabledPasses;
     set({
       compileStatus: 'compiling',
       result: null,
@@ -154,6 +203,8 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
       stale: false,
       stepMode: false,
       stepReached: null,
+      optimization: null,
+      irVersion: 'original',
     });
 
     // Let the "Compiling…" state paint before the synchronous compiler runs.
@@ -166,6 +217,7 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
         result,
         compileStatus: 'compiled',
         stale: hashSource(normaliseSource(get().source)) !== result.sourceHash,
+        optimization: optimiseResult(result, enabledPasses),
         ...(errorStage === null ? {} : { activeStage: errorStage }),
       });
     }, 0);
@@ -184,6 +236,8 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
       selection: { kind: 'none' },
       stale: false,
       activeStage: 'source',
+      optimization: null,
+      irVersion: 'original',
     });
   },
 
@@ -205,6 +259,7 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
       stale: hashSource(normaliseSource(source)) !== result.sourceHash,
       stepReached: next,
       activeStage: next,
+      optimization: optimiseResult(result, get().enabledPasses),
     });
   },
 
@@ -226,6 +281,24 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
       stale: hashSource(normaliseSource(source)) !== result.sourceHash,
       stepReached: stage,
       activeStage: stage,
+      optimization: optimiseResult(result, get().enabledPasses),
     });
   },
+
+  toggleOptPass: (pass) => {
+    const { enabledPasses, result, selection } = get();
+    const enabled = enabledPasses.includes(pass)
+      ? enabledPasses.filter((candidate) => candidate !== pass)
+      : [...enabledPasses, pass];
+
+    set({
+      enabledPasses: enabled,
+      optimization: optimiseResult(result, enabled),
+      // Change records are renumbered when the pass set changes, so a stale
+      // selection could point at a different transformation.
+      ...(selection.kind === 'opt' ? { selection: { kind: 'none' } as Selection } : {}),
+    });
+  },
+
+  setIrVersion: (version) => set({ irVersion: version }),
 }));

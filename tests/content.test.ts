@@ -7,7 +7,7 @@ import {
   STAGE_EXPLANATIONS,
   STAGE_ORDER,
 } from '@/content/explanations';
-import { compile } from '@/lib/compiler';
+import { OPT_PASS_ORDER, compile, optimizeModule } from '@/lib/compiler';
 import type { AstKind, IROpcode } from '@/lib/compiler/types';
 
 const ALL_AST_KINDS: AstKind[] = [
@@ -70,11 +70,11 @@ const ALL_DIAGNOSTIC_CODES = [
 ];
 
 describe('example set', () => {
-  it('has twelve examples (8 learning + 4 error) with unique ids', () => {
-    expect(EXAMPLES).toHaveLength(12);
+  it('has twenty-four examples (17 learning + 7 error) with unique ids', () => {
+    expect(EXAMPLES).toHaveLength(24);
     expect(new Set(EXAMPLES.map((example) => example.id)).size).toBe(EXAMPLES.length);
-    expect(EXAMPLES.filter((example) => example.category === 'learn')).toHaveLength(8);
-    expect(EXAMPLES.filter((example) => example.category === 'error')).toHaveLength(4);
+    expect(EXAMPLES.filter((example) => example.category === 'learn')).toHaveLength(17);
+    expect(EXAMPLES.filter((example) => example.category === 'error')).toHaveLength(7);
   });
 
   it('has well-formed metadata on every example', () => {
@@ -85,6 +85,52 @@ describe('example set', () => {
       expect(example.code.trim().length).toBeGreaterThan(0);
       expect(STAGE_ORDER).toContain(example.suggestedStage);
     }
+  });
+
+  it('suggests the Optimization stage for every example that advertises passes', () => {
+    for (const example of EXAMPLES) {
+      if (example.demonstrates === undefined) continue;
+      expect(example.demonstrates.length, example.id).toBeGreaterThan(0);
+      for (const pass of example.demonstrates) {
+        expect(OPT_PASS_ORDER, example.id).toContain(pass);
+      }
+      expect(example.suggestedStage, example.id).toBe('opt');
+    }
+  });
+
+  it('runs every pass an example advertises, on that example alone', () => {
+    for (const example of EXAMPLES) {
+      if (example.demonstrates === undefined) continue;
+      const result = compile(example.code);
+      expect(result.ir, example.id).not.toBeNull();
+
+      for (const pass of example.demonstrates) {
+        // Isolated: only this pass may run, so the change cannot come from
+        // one of the others.
+        const isolated = optimizeModule(result.ir!.module, [pass]);
+        expect(isolated.fallback, `${example.id} [${pass}]`).toBeNull();
+        expect(isolated.changes.length, `${example.id} [${pass}]`).toBeGreaterThan(0);
+        expect(
+          isolated.changes.every((change) => change.pass === pass),
+          `${example.id} [${pass}]`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  it('exercises every pass in one run for the all-passes tour example', () => {
+    const tour = getExampleById('optimisation-tour');
+    expect(tour).not.toBeNull();
+    const result = compile(tour!.code);
+    expect(result.ir).not.toBeNull();
+
+    const full = optimizeModule(result.ir!.module, OPT_PASS_ORDER);
+    expect(full.fallback).toBeNull();
+    expect(new Set(full.changes.map((change) => change.pass))).toEqual(
+      new Set(OPT_PASS_ORDER),
+    );
+    // The timeline has something to show after every single pass.
+    expect(full.passStates.every((state) => state.status === 'applied')).toBe(true);
   });
 
   it('compiles every learning example cleanly with IR generated', () => {
@@ -110,7 +156,14 @@ describe('example set', () => {
         expect(codes, example.id).toContain(code);
       }
       if (example.expected === 'error') {
-        expect(result.completed.sema === 'failed' || result.completed.parse === 'failed', example.id).toBe(true);
+        // The first stage that can fail owns the error: the lexer, the parser
+        // or semantic analysis. Everything after it stays blocked.
+        expect(
+          result.completed.lex === 'failed' ||
+            result.completed.parse === 'failed' ||
+            result.completed.sema === 'failed',
+          example.id,
+        ).toBe(true);
         expect(result.ir, example.id).toBeNull();
       } else if (example.expected === 'warnings') {
         expect(result.completed.sema, example.id).toBe('warnings');

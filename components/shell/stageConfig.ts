@@ -5,6 +5,7 @@ import {
   FileCode2,
   Gauge,
   GitBranch,
+  Sparkles,
   Workflow,
   type LucideIcon,
 } from 'lucide-react';
@@ -55,6 +56,12 @@ export const STAGE_CONFIG: StageConfig[] = [
     icon: Workflow,
     hueVar: '--stage-ir',
     activeClass: 'border-stage-ir/60 bg-stage-ir/15',
+  },
+  {
+    id: 'opt',
+    icon: Sparkles,
+    hueVar: '--stage-opt',
+    activeClass: 'border-stage-opt/60 bg-stage-opt/15',
   },
   {
     id: 'asm',

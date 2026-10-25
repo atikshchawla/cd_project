@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/select';
 import { ProvenanceBadge } from '@/components/shell/ProvenanceBadge';
 import { scrollWithinBox } from '@/components/common/scrollWithinBox';
+import { IrVersionToggle } from '@/components/common/IrVersionToggle';
 import {
   ASM_ALL_FUNCTIONS,
   ASM_BLOCKED,
@@ -26,9 +27,16 @@ import {
   ASM_NOTE,
   ASM_NOTE_TITLE,
 } from '@/content/explanations';
-import { computeHighlights, createEmptyHighlights, selectionTint } from '@/lib/highlight';
+import {
+  computeHighlights,
+  createEmptyHighlights,
+  selectionTint,
+  type Highlights,
+} from '@/lib/highlight';
+import { findChangeForInstruction } from '@/lib/compiler';
+import { generateAsm } from '@/lib/compiler/asmgen';
 import { useWorkspaceStore } from '@/lib/store';
-import type { AsmLine } from '@/lib/compiler/types';
+import type { AsmLine, CompileResult, IRLine, IRModule } from '@/lib/compiler/types';
 import { cn } from '@/lib/utils';
 
 function kindClass(line: AsmLine): string {
@@ -44,25 +52,29 @@ function kindClass(line: AsmLine): string {
   }
 }
 
-function InstructionPanel({ lineNo }: { lineNo: number }) {
-  const result = useWorkspaceStore((state) => state.result);
-  const highlights = useMemo(
-    () => computeHighlights({ kind: 'asm', lineId: lineNo, origin: 'stage' }, result),
-    [lineNo, result],
-  );
-
-  const line = result?.asm?.lines.find((candidate) => candidate.lineNo === lineNo);
-  if (line === undefined || result === null) {
-    return <p className="text-sm leading-6 text-muted-foreground">{ASM_NO_RESULT}</p>;
-  }
-
+function InstructionPanel({
+  line,
+  result,
+  irLines,
+  irModule,
+  highlights,
+}: {
+  line: AsmLine;
+  result: CompileResult;
+  irLines: IRLine[];
+  irModule: IRModule | null;
+  highlights: Highlights;
+}) {
   const irInstr =
-    line.irInstrId !== undefined ? result.ir?.module.instrs[line.irInstrId] : undefined;
+    line.irInstrId !== undefined && irModule !== null
+      ? irModule.instrs[line.irInstrId]
+      : undefined;
   const irLine =
     line.irInstrId !== undefined
-      ? result.ir?.lines.find((candidate) => candidate.instrId === line.irInstrId)
+      ? irLines.find((candidate) => candidate.instrId === line.irInstrId)
       : undefined;
-  const originNode = irInstr?.astNodeId !== undefined ? result.ast?.nodes[irInstr.astNodeId] : undefined;
+  const originNode =
+    irInstr?.astNodeId !== undefined ? result.ast?.nodes[irInstr.astNodeId] : undefined;
 
   return (
     <div className="flex flex-col gap-2">
@@ -110,6 +122,8 @@ export function AssemblyView() {
   const result = useWorkspaceStore((state) => state.result);
   const selection = useWorkspaceStore((state) => state.selection);
   const stale = useWorkspaceStore((state) => state.stale);
+  const optimization = useWorkspaceStore((state) => state.optimization);
+  const irVersion = useWorkspaceStore((state) => state.irVersion);
   const select = useWorkspaceStore((state) => state.select);
 
   const [functionFilter, setFunctionFilter] = useState<string>('all');
@@ -118,12 +132,27 @@ export function AssemblyView() {
   const listRef = useRef<HTMLDivElement | null>(null);
 
   const highlights = useMemo(
-    () => (stale ? createEmptyHighlights() : computeHighlights(selection, result)),
-    [selection, result, stale],
+    () => (stale ? createEmptyHighlights() : computeHighlights(selection, result, optimization)),
+    [selection, result, optimization, stale],
   );
   const tintClass = useMemo(() => `tint-${selectionTint(selection, result)}`, [selection, result]);
 
-  const lines = useMemo(() => result?.asm?.lines ?? [], [result]);
+  /** Lower the selected IR version: the original module or its optimised clone. */
+  const optimised = irVersion === 'optimized' && optimization !== null;
+  const asmModule = useMemo(() => {
+    if (irVersion === 'optimized' && optimization !== null) {
+      return generateAsm(optimization.module);
+    }
+    return result?.asm ?? null;
+  }, [irVersion, optimization, result]);
+  const irModule: IRModule | null = optimised
+    ? (optimization?.module ?? null)
+    : (result?.ir?.module ?? null);
+  const irLines: IRLine[] = optimised
+    ? (optimization?.lines ?? [])
+    : (result?.ir?.lines ?? []);
+
+  const lines = useMemo(() => asmModule?.lines ?? [], [asmModule]);
   const functions = useMemo(() => {
     const names: string[] = [];
     for (const line of lines) {
@@ -140,7 +169,33 @@ export function AssemblyView() {
     [lines, functionFilter],
   );
 
-  const selectedLineNo = selection.kind === 'asm' ? selection.lineId : null;
+  const selectedChange =
+    selection.kind === 'opt'
+      ? (optimization?.changes.find((change) => change.id === selection.changeId) ?? null)
+      : null;
+
+  // In the original version a row selects an assembly line; in the optimised
+  // version a row selects the transformation (or the IR instruction) it came
+  // from, because its line numbers belong to a different module.
+  const selectedLineNo = !optimised
+    ? selection.kind === 'asm'
+      ? selection.lineId
+      : null
+    : (() => {
+        const primaryIrId =
+          selection.kind === 'opt'
+            ? (selectedChange?.afterInstrId ?? null)
+            : selection.kind === 'ir'
+              ? selection.instrId
+              : null;
+        if (primaryIrId === null) return null;
+        return lines.find((line) => line.irInstrId === primaryIrId)?.lineNo ?? null;
+      })();
+
+  const selectedLine =
+    selectedLineNo === null
+      ? null
+      : (lines.find((line) => line.lineNo === selectedLineNo) ?? null);
 
   useEffect(() => {
     if (stale || selection.kind !== 'asm' || selection.origin !== 'editor') return;
@@ -189,7 +244,7 @@ export function AssemblyView() {
     );
   }
 
-  if (result.asm === null) {
+  if (asmModule === null) {
     return (
       <div className="flex items-start gap-2 rounded-md border border-dashed border-border bg-muted/20 p-6">
         <Cpu aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
@@ -201,10 +256,11 @@ export function AssemblyView() {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
-        <ProvenanceBadge kind="generated" />
+        <ProvenanceBadge kind={optimised ? 'derived' : 'generated'} />
         <Badge variant="outline" className="font-mono text-[0.7rem]">
           {visibleLines.length} {ASM_LINE_COUNT_LABEL}
         </Badge>
+        <IrVersionToggle />
         {functions.length > 1 ? (
           <div className="ml-auto flex items-center gap-2">
             <span className="text-xs text-muted-foreground">{ASM_FUNCTION_LABEL}</span>
@@ -253,11 +309,18 @@ export function AssemblyView() {
             className="max-h-[26rem] overflow-auto bg-background font-mono text-[0.8rem] leading-6"
           >
             {visibleLines.map((line, index) => {
-              const isPrimary = selectedLineNo === line.lineNo;
+              const isPrimary = optimised
+                ? line.irInstrId !== undefined &&
+                  (selection.kind === 'opt'
+                    ? selectedChange?.afterInstrId === line.irInstrId
+                    : selection.kind === 'ir' && selection.instrId === line.irInstrId)
+                : selectedLineNo === line.lineNo;
+              const relatedIds = optimised ? highlights.optInstrIds : highlights.irInstrIds;
               const isRelated =
-                !isPrimary && line.irInstrId !== undefined && highlights.irInstrIds.has(line.irInstrId);
+                !isPrimary && line.irInstrId !== undefined && relatedIds.has(line.irInstrId);
               const isUnrelated = selection.kind !== 'none' && !stale && !isPrimary && !isRelated;
-              const selectable = line.kind === 'instruction';
+              const selectable =
+                line.kind === 'instruction' && (!optimised || line.irInstrId !== undefined);
 
               const content = (
                 <>
@@ -288,6 +351,22 @@ export function AssemblyView() {
                 );
               }
 
+              const pickLine = () => {
+                if (!optimised) {
+                  select({ kind: 'asm', lineId: line.lineNo, origin: 'stage' });
+                  return;
+                }
+                const irId = line.irInstrId;
+                if (irId === undefined) return;
+                const change =
+                  optimization === null ? null : findChangeForInstruction(optimization, irId);
+                if (change !== null) {
+                  select({ kind: 'opt', changeId: change.id, origin: 'stage' });
+                } else {
+                  select({ kind: 'ir', instrId: irId, origin: 'stage' });
+                }
+              };
+
               return (
                 <button
                   key={line.lineNo}
@@ -296,7 +375,7 @@ export function AssemblyView() {
                   }}
                   type="button"
                   aria-pressed={isPrimary}
-                  onClick={() => select({ kind: 'asm', lineId: line.lineNo, origin: 'stage' })}
+                  onClick={pickLine}
                   onKeyDown={(event) => onRowKeyDown(event, index)}
                   className={cn(
                     'flex w-full items-center border-b border-border/60 px-1 text-left transition-colors last:border-b-0 hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
@@ -322,10 +401,16 @@ export function AssemblyView() {
         <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {ASM_INSTRUCTION_TITLE}
         </h3>
-        {selectedLineNo === null || stale ? (
+        {selectedLine === null || stale ? (
           <p className="text-sm leading-6 text-muted-foreground">{ASM_EMPTY_SELECTION}</p>
         ) : (
-          <InstructionPanel lineNo={selectedLineNo} />
+          <InstructionPanel
+            line={selectedLine}
+            result={result}
+            irLines={irLines}
+            irModule={irModule}
+            highlights={highlights}
+          />
         )}
       </section>
     </div>

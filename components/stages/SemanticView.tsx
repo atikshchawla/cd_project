@@ -56,9 +56,10 @@ function useSymbolHighlights() {
   const result = useWorkspaceStore((state) => state.result);
   const selection = useWorkspaceStore((state) => state.selection);
   const stale = useWorkspaceStore((state) => state.stale);
+  const optimization = useWorkspaceStore((state) => state.optimization);
   return useMemo(
-    () => (stale ? createEmptyHighlights() : computeHighlights(selection, result)),
-    [selection, result, stale],
+    () => (stale ? createEmptyHighlights() : computeHighlights(selection, result, optimization)),
+    [selection, result, optimization, stale],
   );
 }
 

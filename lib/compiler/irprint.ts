@@ -1,5 +1,72 @@
 import type { IRInstr, IRLine, IROperand, IRModule } from './types';
 
+/** Render one operand as the IR printer prints it (`%x`, `5`, `%label`, `@g`). */
+export function renderOperand(module: IRModule, operand: IROperand): string {
+  switch (operand.kind) {
+    case 'value':
+      return operand.name;
+    case 'const':
+      return String(operand.value);
+    case 'label':
+      return `%${module.blocks[operand.blockId]?.label ?? `block${operand.blockId}`}`;
+    case 'global':
+      return `@${operand.name}`;
+  }
+}
+
+function typedOperandText(module: IRModule, operand: IROperand, type: string): string {
+  return operand.kind === 'const'
+    ? `${operand.type} ${operand.value}`
+    : `${type} ${renderOperand(module, operand)}`;
+}
+
+/**
+ * Render a single instruction exactly as `printIR` would (without the
+ * two-space indent). Pure and derived from the structured instruction — it
+ * never inspects or parses text.
+ */
+export function renderInstr(module: IRModule, instr: IRInstr): string {
+  const result = instr.result !== undefined ? `${instr.result} = ` : '';
+  const ops = instr.operands.map((operand) => renderOperand(module, operand));
+
+  switch (instr.opcode) {
+    case 'alloca':
+      return `${result}alloca ${instr.type}, align 4`;
+    case 'load':
+      return `${result}load ${instr.type}, ${typedOperandText(module, instr.operands[0], 'ptr')}, align 4`;
+    case 'store': {
+      const [stored, ptr] = instr.operands;
+      return `store ${typedOperandText(module, stored, instr.type)}, ${typedOperandText(module, ptr, 'ptr')}, align 4`;
+    }
+    case 'add':
+    case 'sub':
+    case 'mul':
+      return `${result}${instr.opcode} nsw ${instr.type} ${ops[0]}, ${ops[1]}`;
+    case 'sdiv':
+    case 'srem':
+      return `${result}${instr.opcode} ${instr.type} ${ops[0]}, ${ops[1]}`;
+    case 'icmp':
+      return `${result}icmp ${instr.predicate ?? 'ne'} i32 ${ops[0]}, ${ops[1]}`;
+    case 'zext':
+      return `${result}zext i1 ${ops[0]} to ${instr.toType ?? 'i32'}`;
+    case 'br':
+      if (instr.operands.length === 1) return `br label ${ops[0]}`;
+      return `br i1 ${ops[0]}, label ${ops[1]}, label ${ops[2]}`;
+    case 'ret':
+      if (instr.operands.length === 0) return `ret void`;
+      return `ret ${instr.type} ${ops[0]}`;
+    case 'call': {
+      const args = instr.operands
+        .map((operand) => typedOperandText(module, operand, 'i32'))
+        .join(', ');
+      const call = `call ${instr.type} @${instr.callee ?? ''}(${args})`;
+      return instr.result !== undefined ? `${result}${call}` : call;
+    }
+    case 'unreachable':
+      return `unreachable`;
+  }
+}
+
 /**
  * Print an IR module as text lines (§6.4 rule 10).
  *
@@ -16,62 +83,6 @@ export function printIR(module: IRModule): IRLine[] {
     extra: { instrId?: number; blockId?: number; funcName?: string } = {},
   ): void => {
     lines.push({ lineNo: (lineNo += 1), text, ...extra });
-  };
-
-  const operandText = (operand: IROperand): string => {
-    switch (operand.kind) {
-      case 'value':
-        return operand.name;
-      case 'const':
-        return String(operand.value);
-      case 'label':
-        return `%${module.blocks[operand.blockId]?.label ?? `block${operand.blockId}`}`;
-      case 'global':
-        return `@${operand.name}`;
-    }
-  };
-
-  const typedOperandText = (operand: IROperand, type: string): string =>
-    operand.kind === 'const' ? `${operand.type} ${operand.value}` : `${type} ${operandText(operand)}`;
-
-  const instrText = (instr: IRInstr): string => {
-    const result = instr.result !== undefined ? `${instr.result} = ` : '';
-    const ops = instr.operands.map(operandText);
-
-    switch (instr.opcode) {
-      case 'alloca':
-        return `${result}alloca ${instr.type}, align 4`;
-      case 'load':
-        return `${result}load ${instr.type}, ${typedOperandText(instr.operands[0], 'ptr')}, align 4`;
-      case 'store': {
-        const [stored, ptr] = instr.operands;
-        return `store ${typedOperandText(stored, instr.type)}, ${typedOperandText(ptr, 'ptr')}, align 4`;
-      }
-      case 'add':
-      case 'sub':
-      case 'mul':
-        return `${result}${instr.opcode} nsw ${instr.type} ${ops[0]}, ${ops[1]}`;
-      case 'sdiv':
-      case 'srem':
-        return `${result}${instr.opcode} ${instr.type} ${ops[0]}, ${ops[1]}`;
-      case 'icmp':
-        return `${result}icmp ${instr.predicate ?? 'ne'} i32 ${ops[0]}, ${ops[1]}`;
-      case 'zext':
-        return `${result}zext i1 ${ops[0]} to ${instr.toType ?? 'i32'}`;
-      case 'br':
-        if (instr.operands.length === 1) return `br label ${ops[0]}`;
-        return `br i1 ${ops[0]}, label ${ops[1]}, label ${ops[2]}`;
-      case 'ret':
-        if (instr.operands.length === 0) return `ret void`;
-        return `ret ${instr.type} ${ops[0]}`;
-      case 'call': {
-        const args = instr.operands.map((operand) => typedOperandText(operand, 'i32')).join(', ');
-        const call = `call ${instr.type} @${instr.callee ?? ''}(${args})`;
-        return instr.result !== undefined ? `${result}${call}` : call;
-      }
-      case 'unreachable':
-        return `unreachable`;
-    }
   };
 
   // Globals first: `@g = global i32 <init>`.
@@ -97,7 +108,7 @@ export function printIR(module: IRModule): IRLine[] {
       for (const instrId of block.instrIds) {
         const instr = module.instrs[instrId];
         if (instr === undefined) continue;
-        push(`  ${instrText(instr)}`, { instrId, blockId, funcName: fn.name });
+        push(`  ${renderInstr(module, instr)}`, { instrId, blockId, funcName: fn.name });
       }
     }
 

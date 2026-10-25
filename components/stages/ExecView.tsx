@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ProvenanceBadge } from '@/components/shell/ProvenanceBadge';
 import { scrollWithinBox } from '@/components/common/scrollWithinBox';
+import { IrVersionToggle } from '@/components/common/IrVersionToggle';
 import {
   EXEC_BLOCKED,
   EXEC_CURRENT_INSTRUCTION,
@@ -240,11 +241,22 @@ function MemoryMap({
 export function ExecView() {
   const result = useWorkspaceStore((state) => state.result);
   const stale = useWorkspaceStore((state) => state.stale);
+  const optimization = useWorkspaceStore((state) => state.optimization);
+  const irVersion = useWorkspaceStore((state) => state.irVersion);
 
-  const simulation = useMemo(
-    () => (result?.ir === null || result?.ir === undefined ? null : simulate(result.ir.module)),
-    [result],
-  );
+  // Interpret the selected IR version: the original module, or the optimised
+  // clone. A different version (or a re-run pass) yields a new trace object,
+  // and the reset below rewinds execution to its first step.
+  const simulation = useMemo(() => {
+    if (result?.ir === null || result?.ir === undefined) return null;
+    if (irVersion === 'optimized' && optimization !== null) return simulate(optimization.module);
+    return simulate(result.ir.module);
+  }, [result, irVersion, optimization]);
+
+  /** IR lines of the version being executed, for the "current instruction". */
+  const irLines = irVersion === 'optimized' && optimization !== null
+    ? (optimization?.lines ?? [])
+    : (result?.ir?.lines ?? []);
 
   const [stepIndex, setStepIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -307,7 +319,7 @@ export function ExecView() {
 
   const currentIrLine =
     current?.instrId !== null && current?.instrId !== undefined
-      ? result.ir.lines.find((line) => line.instrId === current.instrId)
+      ? irLines.find((line) => line.instrId === current.instrId)
       : undefined;
 
   const outcomeMeta =
@@ -332,7 +344,14 @@ export function ExecView() {
         <Badge variant="outline" className={cn('font-mono text-[0.7rem]', outcomeMeta.className)}>
           {outcomeMeta.label}
         </Badge>
+        <IrVersionToggle />
       </div>
+
+      {irVersion === 'optimized' && optimization !== null ? (
+        <p className="text-xs leading-5 text-muted-foreground">
+          Interpreting the optimised IR. Switching versions rewinds execution to the first step.
+        </p>
+      ) : null}
 
       {stale ? (
         <p

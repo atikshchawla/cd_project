@@ -1,4 +1,5 @@
 import type { Ast, AstNode, CompileResult, Range, Stage } from '@/lib/compiler/types';
+import type { OptimizationResult } from '@/lib/compiler';
 import type { Selection } from '@/lib/store';
 
 export type SelectionTint = 'source' | 'lex' | 'parse' | 'sema' | 'ir' | 'asm' | 'diagnostic';
@@ -17,6 +18,10 @@ export function selectionTint(selection: Selection, result: CompileResult | null
     case 'symbol':
       return 'sema';
     case 'ir':
+      return 'ir';
+    case 'opt':
+      // An optimisation change is still an IR-to-source mapping; the shared
+      // primary/related tokens do the painting (SPEC 7.3).
       return 'ir';
     case 'asm':
       return 'asm';
@@ -47,7 +52,12 @@ export interface Highlights {
   tokenIds: Set<number>;
   astNodeIds: Set<number>;
   symbolIds: Set<number>;
+  /** Instruction IDs in the **original** IR module. */
   irInstrIds: Set<number>;
+  /** Instruction IDs in the **optimised** clone (Optimization stage only). */
+  optInstrIds: Set<number>;
+  /** The change a `{ kind: 'opt' }` selection points at, for row emphasis. */
+  optChangeId: number | null;
   unavailable?: string;
 }
 
@@ -59,6 +69,8 @@ export function createEmptyHighlights(): Highlights {
     astNodeIds: new Set<number>(),
     symbolIds: new Set<number>(),
     irInstrIds: new Set<number>(),
+    optInstrIds: new Set<number>(),
+    optChangeId: null,
   };
 }
 
@@ -165,10 +177,16 @@ function addNodeAndAncestors(highlights: Highlights, ast: Ast, node: AstNode): v
  *
  * Mapping is done with IDs and source ranges only. When a selection cannot be
  * mapped reliably, `unavailable` explains why instead of guessing.
+ *
+ * `optimization` is only consulted for `{ kind: 'opt' }` selections: it holds
+ * the optimised clone and the per-instruction change records that tie an
+ * optimised instruction back to the original one and, through its AST node, to
+ * a source range. Every other selection kind maps exactly as before.
  */
 export function computeHighlights(
   selection: Selection,
   result: CompileResult | null,
+  optimization: OptimizationResult | null = null,
 ): Highlights {
   const highlights = createEmptyHighlights();
 
@@ -335,6 +353,76 @@ export function computeHighlights(
       highlights.astNodeIds = new Set([node.id]);
       highlights.sourceRanges = [node.range];
       highlights.tokenIds = new Set(tokensFullyInside(result, node.range));
+      return highlights;
+    }
+
+    case 'opt': {
+      if (result.ir === null) {
+        highlights.unavailable =
+          'There is no generated IR for this program, so this selection cannot be mapped.';
+        return highlights;
+      }
+      if (optimization === null) {
+        highlights.unavailable =
+          'There is no optimisation result yet — compile the program and open the Optimization stage.';
+        return highlights;
+      }
+      const change = optimization.changes.find((candidate) => candidate.id === selection.changeId);
+      if (change === undefined) {
+        highlights.unavailable =
+          'This transformation is not in the current pass selection. Toggle the passes again to refresh the list.';
+        return highlights;
+      }
+
+      highlights.optChangeId = change.id;
+
+      // Instructions involved: the original the change is about, whatever the
+      // change left in its place, and everything the change rewrote or reused.
+      const original = result.ir.module.instrs;
+      const optimised = optimization.module.instrs;
+      for (const instrId of [change.beforeInstrId, change.afterInstrId, ...change.relatedInstrIds]) {
+        if (instrId === null) continue;
+        if (original[instrId] !== undefined) highlights.irInstrIds.add(instrId);
+        if (optimised[instrId] !== undefined) highlights.optInstrIds.add(instrId);
+      }
+
+      const before =
+        change.beforeInstrId === null ? undefined : original[change.beforeInstrId];
+      if (before !== undefined) highlights.primary = { stage: 'ir', id: before.id };
+
+      // Source: this change's own instruction plus each instruction it rewrote,
+      // so the highlighted ranges answer "which expressions changed".
+      const ast = result.ast;
+      const nodes: AstNode[] = [];
+      const nodeIdOf = (nodeId: number | null | undefined): number | null => nodeId ?? null;
+      const wanted = [nodeIdOf(change.astNodeId)];
+      for (const instrId of change.relatedInstrIds) {
+        wanted.push(nodeIdOf(original[instrId]?.astNodeId));
+      }
+      if (ast !== null) {
+        for (const nodeId of wanted) {
+          if (nodeId === null) continue;
+          const node = ast.nodes[nodeId];
+          if (node === undefined) continue;
+          if (nodes.some((candidate) => candidate.id === node.id)) continue;
+          nodes.push(node);
+        }
+      }
+
+      if (nodes.length === 0) {
+        highlights.unavailable =
+          'This change is control-flow bookkeeping (a branch or a merge point) with no single source expression.';
+        return highlights;
+      }
+
+      nodes.sort((a, b) => a.range.start - b.range.start);
+      highlights.sourceRanges = nodes.map((node) => node.range);
+      highlights.astNodeIds = new Set(nodes.map((node) => node.id));
+      const tokenIds = new Set<number>();
+      for (const node of nodes) {
+        for (const tokenId of tokensFullyInside(result, node.range)) tokenIds.add(tokenId);
+      }
+      highlights.tokenIds = tokenIds;
       return highlights;
     }
 

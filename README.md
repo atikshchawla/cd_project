@@ -1,7 +1,7 @@
 # Mini-C Compiler Visualizer
 
 An educational Next.js app for exploring how a small C-like program ("Mini-C") moves through
-compiler stages: source → tokens → AST → semantic analysis → LLVM-style IR → x86-64 assembly → execution (VM simulation).
+compiler stages: source → tokens → AST → semantic analysis → LLVM-style IR → IR optimisation → x86-64 assembly → execution (VM simulation).
 
 This app uses its own educational Mini-C compiler written in TypeScript. Its output resembles
 Clang/LLVM output but is not produced by Clang or LLVM. Everything runs in the browser; user code
@@ -36,11 +36,15 @@ bundled into the app.
 2. Press **Compile**. The app runs the whole pipeline in the browser, synchronously and
    deterministically — the same source always produces the same result.
 3. Step through the stage navigator: Source, Lexical Analysis, Syntax Analysis (AST), Semantic
-   Analysis, Intermediate Representation, Generated Assembly, and Execution (VM). Alternatively,
-   use step-through mode to advance the pipeline one stage at a time.
+   Analysis, Intermediate Representation, Optimization, Generated Assembly, and Execution (VM).
+   Alternatively, use step-through mode to advance the pipeline one stage at a time.
 4. Click tokens, AST nodes, symbols, IR instructions, or assembly lines to see them highlighted
    across the editor and the other stages. Selecting a diagnostic jumps to the stage that reported it.
-5. In the Execution (VM) stage, step forward and backward or run the program to see stack frames,
+5. In the Optimization stage, switch passes on and off and click any transformation to see its
+   original instruction, its result, why it happened and why it is safe — synchronised with the
+   source and both IR panes. The Assembly and Execution stages offer an Original/Optimised switch
+   for the IR they work from; switching versions rewinds execution.
+6. In the Execution (VM) stage, step forward and backward or run the program to see stack frames,
    global variables, and memory mutations change in real time.
 
 ## Supported Mini-C subset
@@ -58,6 +62,43 @@ bundled into the app.
 
 Not supported (reported as friendly errors, never executed): bitwise operators, addresses,
 strings, arrays, `#include`/preprocessor directives, and every other C construct.
+
+## Optimization
+
+The Optimization stage sits between IR and assembly and compares two versions of the same module:
+the **original** IR the compiler produced, and an **optimised** clone of it. Four passes run in a
+fixed order, all written in TypeScript for this project — they are this app's own passes, not
+LLVM's, and no LLVM is involved:
+
+1. **Local Value Forwarding** — reuses a value already known inside a basic block instead of
+   re-reading memory (store → load and load → load), dropping the redundant load.
+2. **Constant & Branch Folding** — evaluates pure instructions whose operands are all literals
+   with the same 32-bit helpers the interpreter uses, and reduces a `br` with a constant condition
+   to an unconditional branch.
+3. **Block-Local CSE** — computes the same pure expression once per block and merges the duplicate
+   into the earlier result.
+4. **Dead-Code Elimination** — deletes arithmetic, comparisons, conversions and loads whose
+   results nothing reads (stores, calls, allocas and terminators are never candidates).
+
+What the stage shows:
+
+- Side-by-side **original / optimised IR** with a per-instruction status marker, plus a written
+  legend (`=` unchanged, `±` changed, `→` replaced, `−` removed, `+` added) so no state is
+  communicated by colour alone.
+- **Pass toggles** (each with its applied/clean/off status), an **optimisation timeline** with the
+  instruction count after every pass, and headline statistics (instructions before → after, removed,
+  passes applied).
+- A **transformations list**: every change records the original instruction, the result, why it
+  happened and why it is safe. Before/after text is *derived* from the two modules; the reason and
+  safety notes are *illustrative* hand-written prose, provenance-badged as such.
+- **Synchronised selection** across the editor, both IR panes and the explanation panel. Mapping
+  uses instruction IDs and AST source ranges only — never text matching — and a selection that
+  cannot be mapped says why instead of guessing.
+
+The optimiser never mutates the compiler's own module (it works on a clone), never adds
+instructions, keeps every 32-bit wrap-around/division-by-zero rule intact, and always leaves valid
+terminators. `npm test` includes a suite that runs the whole example set through every pass subset
+and asserts the optimised and unoptimised IR produce identical interpreter results.
 
 ## Limits and safety
 
@@ -78,10 +119,14 @@ strings, arrays, `#include`/preprocessor directives, and every other C construct
   own generator and printer. It is not guaranteed to assemble with a real LLVM toolchain.
 - Provenance badges mark every artifact: *generated* (derived from your source), *derived* (from
   another artifact), *illustrative* (extra teaching content), or *simulated* (derived from VM execution).
-- The assembly stage lowers the unoptimised IR to naive x86-64 assembly text (Intel syntax) with
-  exact line-to-IR mappings. It is illustrative text and is not assembled or executed natively.
-- The VM execution stage runs the IR in a trace-first interpreter with 32-bit C integer semantics,
-  recording full stack and frame states for every step.
+- The assembly stage lowers the selected IR version (original or optimised) to naive x86-64
+  assembly text (Intel syntax) with exact line-to-IR mappings. It is illustrative text and is not
+  assembled or executed natively.
+- The VM execution stage runs the selected IR version in a trace-first interpreter with 32-bit C
+  integer semantics, recording full stack and frame states for every step.
+- The optimization stage is a teaching diff: the four passes are this app's own TypeScript code,
+  their before/after text is derived from the two IR modules, and the prose that explains each
+  change is illustrative.
 
 ## Diagnostics
 
@@ -99,7 +144,7 @@ IR. Blocked stages say so explicitly and link to the first error.
 
 ## Current status
 
-All 7 pipeline stages and interactive features are complete:
+All 8 pipeline stages and interactive features are complete:
 - Application shell with resizable panes and theme switcher (Dark, Light, Sepia, System)
 - Pipeline stage navigator and step-through execution mode
 - Monaco code editor with cross-stage highlighting and diagnostic markers
@@ -108,6 +153,10 @@ All 7 pipeline stages and interactive features are complete:
 - Recursive-descent parser and AST Explorer (React Flow graph + accessible outline)
 - Semantic analysis with clickable symbol table, interactive Scope Tree canvas, and diagnostics
 - LLVM-style IR generation with per-instruction inspector and Copy IR
-- Naive x86-64 assembly generation with 1:1 IR line mappings and Intel syntax
-- Browser-based execution simulator (VM) with reversible stepping, call frame inspection, stack/memory visualization, and output capture
-- 151 unit and snapshot tests covering the entire pipeline
+- Optimization stage with four passes (value forwarding, constant/branch folding, block-local CSE,
+  dead-code elimination), pass toggles, a per-pass timeline, a status legend, side-by-side IR and
+  a per-transformation explanation
+- Naive x86-64 assembly generation with 1:1 IR line mappings and Intel syntax (original or
+  optimised IR)
+- Browser-based execution simulator (VM) with reversible stepping, call frame inspection, stack/memory visualization, and output capture (original or optimised IR)
+- 187 unit and snapshot tests covering the entire pipeline

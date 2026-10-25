@@ -16,7 +16,7 @@ export function StatusBar() {
       className="flex h-6 shrink-0 items-center justify-between gap-3 border-t border-border bg-surface px-3 font-mono text-[12px] text-muted-foreground"
     >
       <span className="truncate">
-        Mini-C compiler v0.1 · IR: LLVM-style (opaque ptr) · opt: none · target x86-64
+        Mini-C compiler v0.1 · IR: LLVM-style (opaque ptr) · opt: in-app, not LLVM · target x86-64
       </span>
       <button
         type="button"

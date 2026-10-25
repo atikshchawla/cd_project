@@ -87,6 +87,7 @@ export function EditorPanel() {
   const result = useWorkspaceStore((state) => state.result);
   const selection = useWorkspaceStore((state) => state.selection);
   const stale = useWorkspaceStore((state) => state.stale);
+  const optimization = useWorkspaceStore((state) => state.optimization);
   const select = useWorkspaceStore((state) => state.select);
   const exampleId = useWorkspaceStore((state) => state.exampleId);
   const example = getExampleById(exampleId);
@@ -94,8 +95,8 @@ export function EditorPanel() {
   const tooLarge = useMemo(() => sourceTooLarge(source), [source]);
 
   const highlights = useMemo(
-    () => (stale ? createEmptyHighlights() : computeHighlights(selection, result)),
-    [selection, result, stale],
+    () => (stale ? createEmptyHighlights() : computeHighlights(selection, result, optimization)),
+    [selection, result, optimization, stale],
   );
 
   const tintClass = useMemo(() => `tint-${selectionTint(selection, result)}`, [selection, result]);

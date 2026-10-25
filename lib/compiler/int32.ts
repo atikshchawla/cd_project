@@ -27,3 +27,30 @@ export function rem32(a: number, b: number): number {
   if (b === 0) return 0;
   return wrap32(a - mul32(div32(a, b), b));
 }
+
+/**
+ * Evaluate an `icmp` predicate over two IR values.
+ *
+ * The simulator and the constant folder both import this so they can never
+ * disagree about what a comparison means: comparisons see the stored numbers
+ * exactly as they are (only the arithmetic helpers wrap). Unknown predicates
+ * compare unequal, matching the interpreter's fallback.
+ */
+export function compare32(predicate: string, a: number, b: number): boolean {
+  switch (predicate) {
+    case 'eq':
+      return a === b;
+    case 'ne':
+      return a !== b;
+    case 'slt':
+      return a < b;
+    case 'sle':
+      return a <= b;
+    case 'sgt':
+      return a > b;
+    case 'sge':
+      return a >= b;
+    default:
+      return a !== b;
+  }
+}

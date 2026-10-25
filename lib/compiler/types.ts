@@ -1,5 +1,5 @@
 export type Range = { start: number; end: number }; // char offsets, [start, end)
-export type Stage = 'source' | 'lex' | 'parse' | 'sema' | 'ir' | 'asm' | 'sim';
+export type Stage = 'source' | 'lex' | 'parse' | 'sema' | 'ir' | 'opt' | 'asm' | 'sim';
 
 export interface Diagnostic {
   id: number;

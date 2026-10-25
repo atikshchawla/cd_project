@@ -25,7 +25,7 @@ import type { Diagnostic, Stage } from '@/lib/compiler/types';
 import { cn } from '@/lib/utils';
 import { TokenExplorer } from '@/components/stages/TokenExplorer';
 
-const ALL_STAGES: Stage[] = ['source', 'lex', 'parse', 'sema', 'ir', 'asm', 'sim'];
+const ALL_STAGES: Stage[] = ['source', 'lex', 'parse', 'sema', 'ir', 'opt', 'asm', 'sim'];
 
 const AstExplorer = dynamic(() => import('@/components/stages/AstExplorer'), {
   ssr: false,
@@ -55,6 +55,18 @@ const IrView = dynamic(
     loading: () => (
       <div className="flex min-h-48 items-center justify-center rounded-md border border-dashed border-border bg-muted/20 p-6 text-sm text-muted-foreground">
         Loading the IR view…
+      </div>
+    ),
+  },
+);
+
+const OptView = dynamic(
+  () => import('@/components/stages/OptView').then((module) => ({ default: module.OptView })),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex min-h-48 items-center justify-center rounded-md border border-dashed border-border bg-muted/20 p-6 text-sm text-muted-foreground">
+        Loading the optimisation view…
       </div>
     ),
   },
@@ -135,7 +147,7 @@ function firstErrorDiagnostic(diagnostics: Diagnostic[]): Diagnostic | null {
 
 /** The stage whose failure blocks the given stage, per the status table. */
 function blockingStageFor(stage: Stage, statuses: Record<Stage, StageStatus>): Stage | null {
-  const order: Stage[] = [...PIPELINE_STAGES];
+  const order: Stage[] = ALL_STAGES.filter((candidate) => candidate !== 'source');
   const index = order.indexOf(stage);
   for (let candidate = index - 1; candidate >= 0; candidate -= 1) {
     const stageName = order[candidate];
@@ -185,7 +197,10 @@ function NotRunStage({ stage }: { stage: Stage }) {
   const label = stageLabelFor(stage);
 
   const reachedIndex = stepReached === null ? -1 : PIPELINE_STAGES.indexOf(stepReached);
-  const stageIndex = PIPELINE_STAGES.indexOf(stage);
+  // Derived stages are not steps of their own: the Optimization stage is run
+  // as soon as its base stage (the IR) has run.
+  const target = stage === 'opt' ? 'ir' : stage;
+  const stageIndex = PIPELINE_STAGES.indexOf(target);
   const isNext = stageIndex === reachedIndex + 1;
 
   return (
@@ -199,7 +214,7 @@ function NotRunStage({ stage }: { stage: Stage }) {
         <Button type="button" size="sm" onClick={() => advanceStep()} disabled={!isNext}>
           {STEP_NOT_RUN_RUN_NEXT}
         </Button>
-        <Button type="button" size="sm" variant="outline" onClick={() => runUntil(stage)}>
+        <Button type="button" size="sm" variant="outline" onClick={() => runUntil(target)}>
           {STEP_NOT_RUN_RUN_THIS(label)}
         </Button>
       </div>
@@ -298,6 +313,8 @@ export function StageWorkspace() {
               <SemanticView />
             ) : activeStage === 'ir' ? (
               <IrView />
+            ) : activeStage === 'opt' ? (
+              <OptView />
             ) : (
               <SourceOverview source={source} />
             )}

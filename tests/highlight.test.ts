@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compile } from '@/lib/compiler';
+import { OPT_PASS_ORDER, compile, optimizeModule } from '@/lib/compiler';
 import { computeHighlights, createEmptyHighlights } from '@/lib/highlight';
 import type { Selection } from '@/lib/store';
 
@@ -208,5 +208,107 @@ describe('computeHighlights', () => {
     const b = createEmptyHighlights();
     a.tokenIds.add(1);
     expect(b.tokenIds.size).toBe(0);
+  });
+
+  it('maps an optimisation selection to both IR versions and the source ranges', () => {
+    const result = compile(`int main() {
+  int a = 2 * 3 + 1;
+  return a;
+}
+`);
+    expect(result.ir).not.toBeNull();
+    const optimization = optimizeModule(result.ir!.module, [...OPT_PASS_ORDER]);
+    const beforeResult = JSON.stringify(result);
+    const beforeOptimisation = JSON.stringify(optimization);
+    const change = optimization.changes.find(
+      (candidate) =>
+        candidate.facts.variant === 'forwarded-load' && candidate.astNodeId !== null,
+    );
+    expect(change).toBeDefined();
+
+    const highlights = computeHighlights(
+      { kind: 'opt', changeId: change!.id, origin: 'stage' },
+      result,
+      optimization,
+    );
+
+    expect(highlights.optChangeId).toBe(change!.id);
+    // The original instruction is the primary, so every stage shows the pair.
+    expect(highlights.primary).toEqual({ stage: 'ir', id: change!.beforeInstrId! });
+    expect(highlights.irInstrIds.has(change!.beforeInstrId!)).toBe(true);
+    // The surviving use on the optimised side is marked too.
+    expect(highlights.optInstrIds.size).toBeGreaterThan(0);
+
+    // Every mapped range really is a slice of the compiled source.
+    expect(highlights.sourceRanges.length).toBeGreaterThan(0);
+    for (const range of highlights.sourceRanges) {
+      expect(range.start).toBeGreaterThanOrEqual(0);
+      expect(range.end).toBeLessThanOrEqual(result.source.length);
+      expect(result.source.slice(range.start, range.end).length).toBeGreaterThan(0);
+    }
+    expect(highlights.tokenIds.size).toBeGreaterThan(0);
+    expect(highlights.unavailable).toBeUndefined();
+
+    // Every recorded change maps without guessing: IDs belong to the module
+    // they claim, and the selection is resolvable after the fact too.
+    for (const other of optimization.changes) {
+      const mapped = computeHighlights(
+        { kind: 'opt', changeId: other.id, origin: 'stage' },
+        result,
+        optimization,
+      );
+      expect(mapped.optChangeId).toBe(other.id);
+      if (other.beforeInstrId !== null) {
+        expect(mapped.primary).toEqual({ stage: 'ir', id: other.beforeInstrId });
+      }
+      for (const id of mapped.optInstrIds) {
+        expect(optimization.module.instrs[id]).toBeDefined();
+      }
+      for (const id of mapped.irInstrIds) {
+        expect(result.ir!.module.instrs[id]).toBeDefined();
+      }
+      if (other.astNodeId !== null) {
+        expect(mapped.unavailable).toBeUndefined();
+        expect(mapped.sourceRanges.length).toBeGreaterThan(0);
+      }
+    }
+
+    // Mapping is by ID and source range only: nothing is parsed or mutated.
+    expect(JSON.stringify(result)).toBe(beforeResult);
+    expect(JSON.stringify(optimization)).toBe(beforeOptimisation);
+  });
+
+  it('reports unavailable for optimisation selections that cannot be resolved', () => {
+    const result = compile(PROGRAM);
+    const optimization = optimizeModule(result.ir!.module, [...OPT_PASS_ORDER]);
+
+    const noResult = computeHighlights({ kind: 'opt', changeId: 1, origin: 'stage' }, result, null);
+    expect(noResult.unavailable).toBeTruthy();
+    expect(noResult.sourceRanges).toEqual([]);
+
+    const unknown = computeHighlights(
+      { kind: 'opt', changeId: 999_999, origin: 'stage' },
+      result,
+      optimization,
+    );
+    expect(unknown.unavailable).toBeTruthy();
+    expect(unknown.sourceRanges).toEqual([]);
+
+    // Without IR there is nothing to map, whatever is passed in.
+    const broken = compile('int main() { return 1 }');
+    expect(broken.ir).toBeNull();
+    const noIr = computeHighlights(
+      { kind: 'opt', changeId: 1, origin: 'stage' },
+      broken,
+      optimization,
+    );
+    expect(noIr.unavailable).toBeTruthy();
+    expect(noIr.irInstrIds.size).toBe(0);
+  });
+
+  it('leaves the empty highlight shape for an optimisation selection when stale', () => {
+    const highlights = createEmptyHighlights();
+    expect(highlights.optInstrIds.size).toBe(0);
+    expect(highlights.optChangeId).toBeNull();
   });
 });

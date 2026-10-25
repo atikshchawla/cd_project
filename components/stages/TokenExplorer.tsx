@@ -67,9 +67,10 @@ export function TokenExplorer() {
   );
   const visibleTokens = useMemo(() => filteredTokens.slice(0, TOKEN_LIMIT), [filteredTokens]);
 
+  const optimization = useWorkspaceStore((state) => state.optimization);
   const highlights = useMemo(
-    () => (stale ? createEmptyHighlights() : computeHighlights(selection, result)),
-    [selection, result, stale],
+    () => (stale ? createEmptyHighlights() : computeHighlights(selection, result, optimization)),
+    [selection, result, optimization, stale],
   );
   const tintClass = useMemo(() => `tint-${selectionTint(selection, result)}`, [selection, result]);
 

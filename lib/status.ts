@@ -28,7 +28,9 @@ export function deriveStageStatus(
 
   if (stepReached !== undefined && stepReached !== null) {
     const reachedIndex = PIPELINE_STAGES.indexOf(stepReached);
-    const stageIndex = PIPELINE_STAGES.indexOf(stage);
+    // The Optimization stage is not a pipeline step of its own: it is derived
+    // from the IR, so it lights up exactly when the IR does.
+    const stageIndex = PIPELINE_STAGES.indexOf(stage === 'opt' ? 'ir' : stage);
     if (stageIndex > reachedIndex && stageIndex !== -1) {
       const earlierFailed = PIPELINE_STAGES.slice(0, stageIndex).some(
         (candidate) => result.completed[candidate] === 'failed',

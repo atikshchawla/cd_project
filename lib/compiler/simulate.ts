@@ -1,4 +1,4 @@
-import { div32, mul32, rem32, wrap32 } from './int32';
+import { compare32, div32, mul32, rem32, wrap32 } from './int32';
 import type { IRFunction, IRModule, IROperand } from './types';
 
 /**
@@ -125,25 +125,6 @@ function operandText(operand: IROperand): string {
       return operand.name;
     case 'label':
       return 'label';
-  }
-}
-
-function compare(predicate: string, left: number, right: number): boolean {
-  switch (predicate) {
-    case 'eq':
-      return left === right;
-    case 'ne':
-      return left !== right;
-    case 'slt':
-      return left < right;
-    case 'sle':
-      return left <= right;
-    case 'sgt':
-      return left > right;
-    case 'sge':
-      return left >= right;
-    default:
-      return left !== right;
   }
 }
 
@@ -399,7 +380,7 @@ export function simulate(module: IRModule): SimulationResult {
         const a = readOperand(current, state.globals, left);
         const b = readOperand(current, state.globals, right);
         const predicate = instr.predicate ?? 'ne';
-        const holds = compare(predicate, a, b);
+        const holds = compare32(predicate, a, b);
         const resultName = instr.result;
         record(
           'exec',

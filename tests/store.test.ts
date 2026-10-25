@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getExampleById } from '@/content/examples';
-import { normaliseSource } from '@/lib/compiler';
+import { normaliseSource, OPT_PASS_ORDER } from '@/lib/compiler';
 import { hashSource } from '@/lib/hash';
 import { INITIAL_WORKSPACE_DATA, useWorkspaceStore } from '@/lib/store';
 
@@ -246,5 +246,69 @@ describe('workspace store', () => {
 
     expect(useWorkspaceStore.getState().compileStatus).toBe('idle');
     expect(useWorkspaceStore.getState().result).toBeNull();
+  });
+
+  it('optimises the compiled IR and keeps the original module untouched', () => {
+    vi.useFakeTimers();
+    useWorkspaceStore.getState().setSource('int main() { int a = 2 * 3 + 1; return a; }');
+    useWorkspaceStore.getState().compileSource();
+    vi.runAllTimers();
+
+    const state = useWorkspaceStore.getState();
+    expect(state.result?.ir).not.toBeNull();
+    expect(state.optimization).not.toBeNull();
+    expect(state.optimization?.enabledPasses).toEqual([...OPT_PASS_ORDER]);
+    expect(state.optimization?.changes.length).toBeGreaterThan(0);
+    expect(state.irVersion).toBe('original');
+
+    // The optimiser works on a clone: the compiler's own module is never touched.
+    const originalJson = JSON.stringify(state.result?.ir?.module);
+    expect(JSON.stringify(useWorkspaceStore.getState().result?.ir?.module)).toBe(originalJson);
+    expect(state.optimization?.module).not.toBe(state.result?.ir?.module);
+
+    useWorkspaceStore.getState().setIrVersion('optimized');
+    expect(useWorkspaceStore.getState().irVersion).toBe('optimized');
+    expect(JSON.stringify(useWorkspaceStore.getState().result?.ir?.module)).toBe(originalJson);
+  });
+
+  it('re-runs the passes and clears a stale change selection when a pass is toggled', () => {
+    vi.useFakeTimers();
+    useWorkspaceStore.getState().setSource('int main() { int a = 2 * 3 + 1; return a; }');
+    useWorkspaceStore.getState().compileSource();
+    vi.runAllTimers();
+
+    const changeId = useWorkspaceStore.getState().optimization!.changes[0]!.id;
+    useWorkspaceStore.getState().select({ kind: 'opt', changeId, origin: 'stage' });
+    expect(useWorkspaceStore.getState().selection).toEqual({
+      kind: 'opt',
+      changeId,
+      origin: 'stage',
+    });
+
+    useWorkspaceStore.getState().toggleOptPass('folding');
+
+    const after = useWorkspaceStore.getState();
+    expect(after.enabledPasses).not.toContain('folding');
+    expect(after.optimization?.enabledPasses).not.toContain('folding');
+    expect(after.optimization?.changes.some((change) => change.pass === 'folding')).toBe(false);
+    expect(after.selection).toEqual({ kind: 'none' });
+    expect(after.result).not.toBeNull();
+  });
+
+  it('resets the optimisation and IR version when a new compile starts', () => {
+    vi.useFakeTimers();
+    useWorkspaceStore.getState().setSource('int main() { return 1; }');
+    useWorkspaceStore.getState().compileSource();
+    vi.runAllTimers();
+    useWorkspaceStore.getState().setIrVersion('optimized');
+
+    useWorkspaceStore.getState().compileSource();
+
+    expect(useWorkspaceStore.getState().optimization).toBeNull();
+    expect(useWorkspaceStore.getState().irVersion).toBe('original');
+
+    vi.runAllTimers();
+    expect(useWorkspaceStore.getState().optimization).not.toBeNull();
+    expect(useWorkspaceStore.getState().irVersion).toBe('original');
   });
 });
