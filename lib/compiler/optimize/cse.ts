@@ -5,8 +5,15 @@ import { dropInstructions, findUses, rewriteUses, usesConfinedToBlock } from './
 /** A change before the orchestrator assigns it a stable index. */
 export type PendingChange = Omit<OptChange, 'id'>;
 
-/** Opcodes that are pure: identical inputs always mean an identical result. */
-const PURE_OPCODES = new Set(['add', 'sub', 'mul', 'sdiv', 'srem', 'icmp', 'zext']);
+/**
+ * Opcodes that are pure: identical inputs always mean an identical result.
+ *
+ * `ptradd` joins them — it is plain address arithmetic and cannot fail —
+ * while `ptrdiff` stays out because it raises a runtime error when its two
+ * addresses are not in the same block. `load` stays out because memory can
+ * change, which is what pass 1 handles.
+ */
+const PURE_OPCODES = new Set(['add', 'sub', 'mul', 'sdiv', 'srem', 'icmp', 'zext', 'ptradd']);
 
 /** Canonical key of a pure instruction: opcode, type, predicate and operands. */
 function cseKey(module: IRModule, instrId: number): string | null {

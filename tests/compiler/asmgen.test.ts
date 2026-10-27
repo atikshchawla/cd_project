@@ -166,4 +166,54 @@ describe('generateAsm (naive x86-64 lowering)', () => {
     expect(failed.asm).toBeNull();
     expect(failed.completed.asm).toBe('blocked');
   });
+
+  it('lowers pointer arithmetic into scaled addressing and cell differences', () => {
+    const { result, asm } = asmOf(`
+int a[3] = {7, 8, 9};
+int main() {
+  int *p = a;
+  int i = 2;
+  return p[i] + (p - a);
+}
+`);
+    const text = textOf(asm);
+
+    // p[i] lowers to `ptradd`, i.e. base + index * 4 bytes per cell.
+    expect(text).toMatch(/lea \w+, \[\w+ \+ \w+\*4\]/);
+    // p - a lowers to `ptrdiff`: subtract the addresses, then shift back into cells.
+    expect(text).toMatch(/sub e[a-z]{2}, e[a-z]{2}/);
+    expect(text).toMatch(/sar \w+, 2/);
+    // The global array reaches the data segment with all of its cells.
+    expect(text).toContain('a:');
+    expect(text).toContain('.long 7, 8, 9');
+
+    // Every instruction, including ptradd and ptrdiff, still has an assembly line.
+    const mapped = new Set(
+      asm.lines
+        .map((line) => line.irInstrId)
+        .filter((id): id is number => id !== undefined),
+    );
+    for (const instrId of blockInstrIds(result.ir!.module)) {
+      expect(mapped.has(instrId), `IR instruction ${instrId} has no assembly line`).toBe(true);
+    }
+  });
+
+  it('reserves every cell of a multi-cell alloca in the stack frame', () => {
+    const frameSize = (source: string): number => {
+      const line = asmOf(source)
+        .asm.lines.map((entry) => entry.text)
+        .find((text) => text.trim().startsWith('sub rsp'));
+      expect(line, 'the function must reserve a frame').toBeDefined();
+      return Number(line!.split(', ')[1]);
+    };
+
+    const scalar = frameSize('int main() { int a = 7; return a; }');
+    const array = frameSize('int main() { int a[3] = {7, 8, 9}; return a[2]; }');
+
+    // Three cells need 12 bytes where a scalar needs 4, so the frame grows by at
+    // least 8 bytes — the array is not collapsed into a single slot.
+    expect(array - scalar).toBeGreaterThanOrEqual(8);
+    expect(scalar % 16).toBe(0);
+    expect(array % 16).toBe(0);
+  });
 });

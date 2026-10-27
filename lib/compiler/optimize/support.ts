@@ -1,4 +1,4 @@
-import type { IRFunction, IRInstr, IRModule, IROperand } from '../types';
+import type { IRFunction, IRInstr, IRModule, IROperand, IRType } from '../types';
 
 /**
  * Shared plumbing for the optimisation passes.
@@ -48,6 +48,81 @@ export function ptrKey(operand: IROperand): string | null {
 export function isGlobalKey(key: string): boolean {
   return key.startsWith('g:');
 }
+
+/** The instruction that defines `name` anywhere in `module`, if any. */
+export function definitionOf(module: IRModule, name: string): IRInstr | undefined {
+  for (const fn of module.functions) {
+    for (const blockId of fn.blockIds) {
+      const block = module.blocks[blockId];
+      if (block === undefined) continue;
+      for (const instrId of block.instrIds) {
+        const instr = module.instrs[instrId];
+        if (instr?.result === name) return instr;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * True when the operand names storage the module allocates itself — an
+ * `alloca` result or a `@global`.
+ *
+ * Those blocks are created by the very instruction that names them, so
+ * reading or writing through one can only ever land inside a live cell: the
+ * access never reports an invalid pointer, a null dereference or a
+ * use-after-free at run time. Anything else (a loaded pointer, a `ptradd`
+ * result) may point anywhere, which is what makes it unsafe to touch.
+ */
+export function isDirectPointer(module: IRModule, operand: IROperand): boolean {
+  if (operand.kind === 'global') return true;
+  if (operand.kind !== 'value') return false;
+  return definitionOf(module, operand.name)?.opcode === 'alloca';
+}
+
+/**
+ * The IR type of an operand, so passes can tell a pointer from a plain value.
+ *
+ * `alloca` results always count as pointers (they are addresses even when the
+ * array they name is spelled `i32` with a `shape`), and anything unresolvable
+ * reports `ptr` so callers stay conservative.
+ */
+export function operandType(module: IRModule, fn: IRFunction, operand: IROperand): IRType {
+  switch (operand.kind) {
+    case 'const':
+      return operand.type;
+    case 'global':
+    case 'string':
+      return 'ptr';
+    case 'label':
+      return 'i1';
+    case 'value': {
+      const param = fn.params.find((candidate) => candidate.name === operand.name);
+      if (param !== undefined) return param.type;
+      const defining = definitionOf(module, operand.name);
+      if (defining === undefined) return 'ptr';
+      if (defining.opcode === 'alloca') return 'ptr';
+      if (defining.opcode === 'icmp') return 'i1';
+      return defining.type;
+    }
+  }
+}
+
+/**
+ * True when any argument of a call could carry this function's own memory out
+ * to the callee (an address of a local, an array's base, a pointer value).
+ *
+ * A callee that receives one can write back through it, so it may change any
+ * cell this frame can reach; a call whose arguments are all plain integers can
+ * still touch globals, but never the caller's stack.
+ */
+export function callMayEscape(module: IRModule, fn: IRFunction, instr: IRInstr): boolean {
+  if (BUILTIN_CALLS.has(instr.callee ?? '')) return false; // they never touch our memory
+  return instr.operands.some((operand) => operandType(module, fn, operand) === 'ptr');
+}
+
+/** The language's own calls: they write neither globals nor the caller's frame. */
+export const BUILTIN_CALLS = new Set(['malloc', 'free', 'delete', 'print', 'printf']);
 
 /** Instruction IDs of one function, in block order then program order. */
 export function functionInstrIds(module: IRModule, fn: IRFunction): number[] {

@@ -23,6 +23,7 @@ import {
   EXEC_DATA_TITLE,
   EXEC_FRAME_BYTES,
   EXEC_HEAP_EMPTY,
+  EXEC_HEAP_FREED,
   EXEC_HEAP_TITLE,
   EXEC_JUST_ALLOCATED,
   EXEC_JUST_WRITTEN,
@@ -33,6 +34,8 @@ import {
   EXEC_OUTCOME_FINISHED,
   EXEC_OUTCOME_NO_MAIN,
   EXEC_OUTCOME_STEP_LIMIT,
+  EXEC_OUTPUT_EMPTY,
+  EXEC_OUTPUT_TITLE,
   EXEC_PAUSE_LABEL,
   EXEC_RESET_LABEL,
   EXEC_RESULT_RUNNING,
@@ -52,12 +55,32 @@ import {
   EXEC_TRACE_EMPTY,
   EXEC_TRACE_TITLE,
 } from '@/content/explanations';
-import { simulate, type SimFrame, type SimSlot, type SimulationResult } from '@/lib/compiler/simulate';
+import {
+  blockCells,
+  simulate,
+  type SimAlloc,
+  type SimFrame,
+  type SimSlot,
+  type SimulationResult,
+} from '@/lib/compiler/simulate';
 import { useWorkspaceStore } from '@/lib/store';
 import { cn } from '@/lib/utils';
 
 function showValue(value: number): string {
   return `${value} (0x${(value >>> 0).toString(16)})`;
+}
+
+/** One block's cells as a list, elided after eight so a large array stays readable. */
+function showCells(cells: number[]): string {
+  const head = cells.slice(0, 8).map(showValue).join(', ');
+  return cells.length > 8 ? `[${head}, … ${cells.length - 8} more]` : `[${head}]`;
+}
+
+/** `0xc` plus the address range a block occupies. */
+function showBlock(block: SimAlloc): string {
+  const end = block.start + block.size - 1;
+  const range = end === block.start ? `${block.start}` : `${block.start}–${end}`;
+  return `0x${(block.start >>> 0).toString(16)} · cells ${range} · ${block.size} × 4 B`;
 }
 
 function slotRows(frame: SimFrame): SimSlot[] {
@@ -187,11 +210,15 @@ function MemoryMap({
   stepIndex: number;
 }) {
   const state = simulation.steps[stepIndex]?.state;
-  const globals = Object.entries(state?.globals ?? {});
+  const allocations = state?.allocations ?? [];
+  const dataBlocks = allocations.filter((block) => block.kind === 'global');
+  const heapBlocks = allocations.filter((block) => block.kind === 'heap');
   const stackBytes = (state?.frames ?? []).reduce(
     (total, frame) => total + Object.keys(frame.slots).length * 4,
     0,
   );
+
+  const cellsOf = (block: SimAlloc): number[] => (state === undefined ? [] : blockCells(state, block));
 
   return (
     <section
@@ -205,22 +232,44 @@ function MemoryMap({
 
       <div className="rounded border border-teal-300 bg-teal-50/60 p-2">
         <p className="text-[0.7rem] font-semibold text-teal-900">{EXEC_DATA_TITLE}</p>
-        {globals.length === 0 ? (
+        {dataBlocks.length === 0 ? (
           <p className="mt-1 text-xs text-teal-900/80">{EXEC_DATA_EMPTY}</p>
         ) : (
           <ul className="mt-1 flex flex-col gap-0.5 font-mono text-[0.7rem] text-teal-950">
-            {globals.map(([name, value]) => (
-              <li key={name}>
-                @{name} = {showValue(value)}
-              </li>
-            ))}
+            {dataBlocks.map((block) => {
+              const cells = cellsOf(block);
+              return (
+                <li key={block.name ?? block.start}>
+                  @{block.name ?? block.start} ={' '}
+                  {block.size === 1 ? showValue(cells[0] ?? 0) : showCells(cells)}
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>
 
       <div className="rounded border border-border bg-muted/30 p-2">
         <p className="text-[0.7rem] font-semibold text-muted-foreground">{EXEC_HEAP_TITLE}</p>
-        <p className="mt-1 text-xs leading-5 text-muted-foreground">{EXEC_HEAP_EMPTY}</p>
+        {heapBlocks.length === 0 ? (
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">{EXEC_HEAP_EMPTY}</p>
+        ) : (
+          <ul className="mt-1 flex flex-col gap-0.5 font-mono text-[0.7rem]">
+            {heapBlocks.map((block) => (
+              <li
+                key={block.start}
+                className={cn(block.freed && 'text-muted-foreground line-through')}
+              >
+                heap @ {showBlock(block)}
+                {block.freed ? (
+                  <span className="ml-1 rounded bg-rose-200 px-1 text-[0.6rem] font-semibold text-rose-900 no-underline">
+                    {EXEC_HEAP_FREED}
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
 
       <div className="rounded border border-violet-300 bg-violet-50/60 p-2">
@@ -333,6 +382,7 @@ export function ExecView() {
 
   const frames = current?.state.frames ?? [];
   const poppedFrame = current?.poppedFrame ?? null;
+  const output = current?.state.output ?? '';
 
   return (
     <div className="flex flex-col gap-3">
@@ -456,6 +506,22 @@ export function ExecView() {
               : EXEC_RESULT_VALUE(simulation.result)}
           </p>
         ) : null}
+      </section>
+
+      <section
+        aria-label={EXEC_OUTPUT_TITLE}
+        className="flex flex-col gap-1.5 rounded-md border border-border p-3"
+      >
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          {EXEC_OUTPUT_TITLE}
+        </h3>
+        {output.length === 0 ? (
+          <p className="text-xs leading-5 text-muted-foreground">{EXEC_OUTPUT_EMPTY}</p>
+        ) : (
+          <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded border border-border bg-muted/40 px-3 py-2 font-mono text-xs leading-5">
+            {output}
+          </pre>
+        )}
       </section>
 
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">

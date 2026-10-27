@@ -21,9 +21,9 @@ export interface Example {
 }
 
 /**
- * The full example set (§10): seventeen learning examples, each focused on one
+ * The full example set (§10): twenty-two learning examples, each focused on one
  * idea — including six that showcase the Optimization stage pass by pass — plus
- * seven error examples that demonstrate diagnostics, blocked stages and
+ * nine error examples that demonstrate diagnostics, blocked stages and
  * warnings.
  */
 export const EXAMPLES: Example[] = [
@@ -361,6 +361,131 @@ int main() {
     expected: 'success',
   },
   {
+    id: 'array-basics',
+    title: 'Arrays and element access',
+    category: 'learn',
+    objective: 'See one array become one multi-cell slot, and every index become address arithmetic.',
+    code: `int main() {
+  int a[5] = {1, 2, 3, 4, 5};
+  int sum = 0;
+  for (int i = 0; i < 5; i++) {
+    sum = sum + a[i];
+  }
+  return sum;
+}
+`,
+    suggestedStage: 'ir',
+    explanation:
+      'The declaration reserves five cells in a single alloca [5 x i32]. Reading a[i] does not address a special array location: it computes %a + i with a ptradd (the offset is folded in when i is a literal) and loads from there. The run ends with 15, and indexing past the end is reported as a runtime error instead of quietly reading the next variable.',
+    expected: 'success',
+  },
+  {
+    id: 'array-multidimensional',
+    title: 'Two-dimensional arrays',
+    category: 'learn',
+    objective: 'Watch a row and a column become two steps of the same address calculation.',
+    code: `int main() {
+  int m[2][3] = {{1, 2, 3}, {4, 5, 6}};
+  int total = 0;
+  for (int r = 0; r < 2; r++) {
+    for (int c = 0; c < 3; c++) {
+      total = total + m[r][c];
+    }
+  }
+  return total;
+}
+`,
+    suggestedStage: 'ir',
+    explanation:
+      'int m[2][3] is one block of six cells: an array of two elements, each of which is an array of three. m[r] adds r * 3 cells, then m[r][c] adds c, so the row is scaled and the column is not — that is row-major order spelled out as arithmetic. The loop visits every cell once and returns 21.',
+    expected: 'success',
+  },
+  {
+    id: 'pointers-and-heap',
+    title: 'Pointers, addresses and malloc',
+    category: 'learn',
+    objective: 'Pass an address to a function, write through it, and work with a heap block.',
+    code: `void fill(int *p, int n) {
+  for (int i = 0; i < n; i++) {
+    p[i] = (i + 1) * 10;
+  }
+}
+
+int main() {
+  int x = 1;
+  int *p = &x;
+  *p = *p + 4;
+  int *heap = malloc(3);
+  fill(heap, 3);
+  int sum = x + heap[0] + heap[1] + heap[2];
+  free(heap);
+  return sum;
+}
+`,
+    suggestedStage: 'sim',
+    explanation:
+      '&x produces the cell that holds x, and fill writes straight into it through the pointer — x ends as 5 without the function ever naming it. malloc reserves three cells on the heap and hands back their address, which p[i] walks exactly like an array, and free releases them. The execution stage shows the heap block appearing and being released, and reading the block after free would stop the run with a use-after-free error.',
+    expected: 'success',
+  },
+  {
+    id: 'structs-and-unions',
+    title: 'Structs, unions and ->',
+    category: 'learn',
+    objective: 'Lay fields out in consecutive cells and overlay two views of the same memory.',
+    code: `struct Point {
+  int x;
+  int y;
+};
+
+union Value {
+  int asNumber;
+  int asCells[2];
+};
+
+int main() {
+  struct Point p = {3, 4};
+  p.x = p.x + 1;
+  struct Point *q = &p;
+  q->y = q->y * 3;
+  union Value v;
+  v.asCells[0] = 5;
+  v.asCells[1] = 6;
+  return p.x * 1000 + p.y * 10 + v.asNumber;
+}
+`,
+    suggestedStage: 'sema',
+    explanation:
+      'A struct gives every field its own cell in declaration order, so p.x is offset 0 and p.y is offset 1 — p.x is simply a load from the struct\'s address, and q->y is the same thing after taking the address of q first. A union starts every field at offset 0 instead, so writing v.asCells[0] and reading v.asNumber see the same cell: 4125 shows all three results at once.',
+    expected: 'success',
+  },
+  {
+    id: 'recursion-with-printf',
+    title: 'Recursion, arrays and printf',
+    category: 'learn',
+    objective: 'Run a program that combines arrays, recursion and formatted output.',
+    code: `int factorial(int n) {
+    if (n <= 1) return 1;
+    return n * factorial(n - 1);
+}
+
+int main() {
+    int a[5] = {1, 2, 3, 4, 5};
+    int sum = 0;
+
+    for (int i = 0; i < 5; i++) {
+        sum += a[i];
+    }
+
+    printf("sum=%d factorial=%d\\n", sum, factorial(5));
+    return 0;
+}
+`,
+    suggestedStage: 'sim',
+    explanation:
+      'A whole Mini-C program in one view: the array is summed with indexed reads, factorial calls itself five deep (each call gets its own frame in the execution stage), and printf writes the formatted line to the output panel. The output is sum=15 factorial=120, produced entirely by the interpreter — nothing here is executed natively.',
+    expected: 'success',
+  },
+  {
     id: 'missing-semicolon',
     title: 'Missing semicolon',
     category: 'error',
@@ -452,13 +577,13 @@ int main() {
     category: 'error',
     objective: 'See a reserved-but-unsupported word refused instead of used as a name.',
     code: `int main() {
-  int struct = 1;
-  return struct;
+  int char = 1;
+  return char;
 }
 `,
     suggestedStage: 'parse',
     explanation:
-      'struct is reserved for a future Mini-C that does not exist yet. The lexer recognises it as a word rather than mis-lexing it, and the parser refuses it with E1010 — so the error points at the word itself, not at some later symptom.',
+      'char is reserved for a future Mini-C that stores text. The lexer recognises it as a keyword rather than mis-lexing it, and the parser refuses it with E1010 — so the error points at the word itself, not at some later symptom.',
     expected: 'error',
     expectedErrorCodes: ['E1010'],
   },
@@ -478,6 +603,51 @@ int main() {
       'The second int x reuses the name in the same scope, so semantic analysis reports E3002 with a note pointing at the first declaration. Putting the second one in its own { } block instead would be shadowing, which is allowed — see the scopes and shadowing example.',
     expected: 'error',
     expectedErrorCodes: ['E3002'],
+  },
+  {
+    id: 'missing-member',
+    title: 'A field that does not exist',
+    category: 'error',
+    objective: 'See semantic analysis reject a member the record never declared (E3005).',
+    code: `struct Point {
+  int x;
+  int y;
+};
+
+int main() {
+  struct Point p = {1, 2};
+  return p.z;
+}
+`,
+    suggestedStage: 'sema',
+    explanation:
+      'Point has exactly two fields, x and y, so p.z cannot be resolved. Semantic analysis reports E3005 naming the member and points at it — and because the field was never laid out, no IR is produced for the access at all.',
+    expected: 'error',
+    expectedErrorCodes: ['E3005'],
+  },
+  {
+    id: 'record-by-value',
+    title: 'Passing a record by value',
+    category: 'error',
+    objective: 'See the supported boundary: records travel by pointer, not by value (E1010).',
+    code: `struct Point {
+  int x;
+  int y;
+};
+
+int sum(struct Point p) {
+  return p.x + p.y;
+}
+
+int main() {
+  return 0;
+}
+`,
+    suggestedStage: 'sema',
+    explanation:
+      'Copying a whole record would mean copying every cell into the caller\'s argument list, which this dialect does not lower. Semantic analysis reports E1010 on the parameter and suggests a pointer — inside the body p.x still checks out, because the error is about the signature, not the fields.',
+    expected: 'error',
+    expectedErrorCodes: ['E1010'],
   },
 ];
 

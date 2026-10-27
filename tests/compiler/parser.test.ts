@@ -281,6 +281,90 @@ describe('parser', () => {
     expect(strayExpression.diagnostics[0].message).toContain('at file scope');
   });
 
+  it('parses array declarators with dimensions and nested initialiser lists', () => {
+    const source =
+      'int main() {\n  int a[2][3] = {{1, 2, 3}, {4, 5, 6}};\n  return a[1][2];\n}\n';
+    const { ast, diagnostics } = parseSource(source);
+    expect(diagnostics).toEqual([]);
+
+    const decl = nodesOfKind(ast!, 'VarDecl')[0];
+    expect(decl.name).toBe('a');
+    expect(decl.typeRef).toMatchObject({ base: 'int', stars: 0, dims: [2, 3] });
+
+    const init = ast!.nodes[decl.childIds[0]];
+    expect(init.kind).toBe('InitListExpr');
+    expect(init.childIds).toHaveLength(2);
+    const secondRow = ast!.nodes[init.childIds[1]];
+    expect(secondRow.kind).toBe('InitListExpr');
+    expect(secondRow.childIds.map((id) => ast!.nodes[id].value)).toEqual([4, 5, 6]);
+
+    const subscripts = nodesOfKind(ast!, 'ArraySubscriptExpr');
+    expect(subscripts.map((node) => textOf(source, node)).sort()).toEqual(['a[1]', 'a[1][2]']);
+  });
+
+  it('parses pointer declarators together with & and * expressions', () => {
+    const source = 'int main() {\n  int x = 1;\n  int *p = &x;\n  *p = *p + 1;\n  return *p;\n}\n';
+    const { ast, diagnostics } = parseSource(source);
+    expect(diagnostics).toEqual([]);
+
+    const decl = nodesOfKind(ast!, 'VarDecl').find((node) => node.name === 'p');
+    expect(decl?.typeRef).toMatchObject({ base: 'int', stars: 1, dims: [] });
+
+    const operators = nodesOfKind(ast!, 'UnaryOperator')
+      .map((node) => node.op)
+      .sort();
+    expect(operators).toEqual(['prefix&', 'prefix*', 'prefix*', 'prefix*']);
+  });
+
+  it('parses struct and union declarations into RecordDecl and FieldDecl nodes', () => {
+    const source =
+      'struct Point { int x; int y; };\nunion Value { int a; int b[2]; };\nint main() { return 0; }\n';
+    const { ast, diagnostics } = parseSource(source);
+    expect(diagnostics).toEqual([]);
+
+    const records = nodesOfKind(ast!, 'RecordDecl');
+    expect(records.map((node) => `${node.op} ${node.name}`)).toEqual([
+      'struct Point',
+      'union Value',
+    ]);
+    const fields = nodesOfKind(ast!, 'FieldDecl');
+    expect(fields.map((node) => node.name)).toEqual(['x', 'y', 'a', 'b']);
+    expect(fields[3].typeRef).toMatchObject({ base: 'int', stars: 0, dims: [2] });
+  });
+
+  it('parses new, delete, print/printf, sizeof and member access', () => {
+    const source = [
+      'struct Point { int x; int y; };',
+      'int main() {',
+      '  struct Point *p = new struct Point;',
+      '  int *a = new int[3];',
+      '  p->x = 1;',
+      '  p.x = 2;',
+      '  a[0] = 3;',
+      '  printf("%d\\n", p.x);',
+      '  delete p;',
+      '  delete a;',
+      '  return sizeof(int *);',
+      '}',
+      '',
+    ].join('\n');
+    const { ast, diagnostics } = parseSource(source);
+    expect(diagnostics).toEqual([]);
+
+    expect(nodesOfKind(ast!, 'NewExpr').map((node) => node.op)).toEqual(['new', 'new[]']);
+    expect(nodesOfKind(ast!, 'DeleteStmt')).toHaveLength(2);
+    expect(nodesOfKind(ast!, 'PrintStmt').map((node) => node.op)).toEqual(['printf']);
+    expect(nodesOfKind(ast!, 'SizeOfExpr')[0].typeRef).toMatchObject({
+      base: 'int',
+      stars: 1,
+      dims: [],
+    });
+    expect(
+      nodesOfKind(ast!, 'MemberExpr').map((node) => `${node.op}${node.name}`),
+    ).toEqual(['->x', '.x', '.x']);
+    expect(nodesOfKind(ast!, 'StringLiteral')).toHaveLength(1);
+  });
+
   it('reports reserved words as unsupported (E1010)', () => {
     for (const source of ['char x;', 'int main() { switch (x) { } }', 'int main() { do ; }']) {
       const { ast, diagnostics } = parseSource(source);
@@ -288,7 +372,7 @@ describe('parser', () => {
       expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0]).toMatchObject({ code: 'E1010', stage: 'unsupported' });
       expect(diagnostics[0].message).toContain('does not support');
-      expect(diagnostics[0].notes?.[0]?.message).toContain('Supported types are int and void');
+      expect(diagnostics[0].notes?.[0]?.message).toContain('Supported types are');
     }
   });
 

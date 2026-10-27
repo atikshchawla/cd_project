@@ -126,18 +126,52 @@ int main() {
   });
 
   it('reports unsupported characters as E1010 and continues lexing', () => {
-    const source = '& | ^ ~ ? : . [ ] " \'';
+    const source = '| ^ ~ ? : @';
     const { tokens, diagnostics } = tokenize(source);
 
     expect(tokens).toEqual([]);
-    expect(diagnostics).toHaveLength(11);
+    expect(diagnostics).toHaveLength(6);
     expect(diagnostics.every((diagnostic) => diagnostic.code === 'E1010')).toBe(true);
     expect(diagnostics.every((diagnostic) => diagnostic.stage === 'unsupported')).toBe(true);
     expect(diagnostics.every((diagnostic) => diagnostic.severity === 'error')).toBe(true);
 
-    const continued = tokenize('int a = 1; & int b = 2;');
+    const continued = tokenize('int a = 1; | int b = 2;');
     expect(continued.diagnostics).toHaveLength(1);
     expect(continued.tokens.map((token) => token.text)).toContain('b');
+  });
+
+  it('lexes the characters the language gained, with no diagnostics', () => {
+    // `& . [ ] "` are address-of, member access, subscripts and strings now.
+    const { tokens, diagnostics } = tokenize('& p . x a [ 0 ] "s\\n"');
+    expect(diagnostics).toEqual([]);
+    expect(tokens.map((token) => token.text)).toEqual([
+      '&',
+      'p',
+      '.',
+      'x',
+      'a',
+      '[',
+      '0',
+      ']',
+      '"s\\n"',
+    ]);
+    expect(tokens.find((token) => token.text === '"s\\n"')?.kind).toBe('string-literal');
+  });
+
+  it('reports an unterminated string literal as E1003', () => {
+    const { tokens, diagnostics } = tokenize('printf("oops);');
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({ code: 'E1003', stage: 'lex' });
+    expect(diagnostics[0].message).toContain('Unterminated string');
+    expect(diagnostics[0].range).toEqual({ start: 7, end: 14 });
+    // `printf` `(` and the broken string are all still emitted, so the rest of
+    // the line stays visible to later stages.
+    expect(tokens.map((token) => token.kind)).toEqual([
+      'keyword',
+      'punctuator',
+      'string-literal',
+    ]);
+    expect(tokens[2].text).toBe('"oops);');
   });
 
   it('reports truly invalid characters as E1001', () => {
@@ -187,7 +221,7 @@ int main() {
   });
 
   it('assigns diagnostic ids in order', () => {
-    const { diagnostics } = tokenize('& 2147483648 "');
+    const { diagnostics } = tokenize('| 2147483648 ~');
     expect(diagnostics.map((diagnostic) => diagnostic.id)).toEqual([1, 2, 3]);
   });
 

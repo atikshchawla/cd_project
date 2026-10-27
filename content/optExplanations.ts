@@ -182,6 +182,8 @@ function describeOperand(operand: IROperand): string {
       return `@${operand.name}`;
     case 'label':
       return `block ${operand.blockId}`;
+    case 'string':
+      return `the format string ${JSON.stringify(operand.value)}`;
   }
 }
 

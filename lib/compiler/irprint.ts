@@ -11,7 +11,20 @@ export function renderOperand(module: IRModule, operand: IROperand): string {
       return `%${module.blocks[operand.blockId]?.label ?? `block${operand.blockId}`}`;
     case 'global':
       return `@${operand.name}`;
+    case 'string':
+      return `"${escapeForIR(operand.value)}"`;
   }
+}
+
+/** Re-escape a decoded string so it reads like source again (`"sum=%d\n"`). */
+function escapeForIR(text: string): string {
+  return text
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t')
+    .replace(/\0/g, '\\0');
 }
 
 function typedOperandText(module: IRModule, operand: IROperand, type: string): string {
@@ -31,7 +44,8 @@ export function renderInstr(module: IRModule, instr: IRInstr): string {
 
   switch (instr.opcode) {
     case 'alloca':
-      return `${result}alloca ${instr.type}, align 4`;
+      // A multi-cell alloca prints its shape: `alloca [5 x i32], align 4`.
+      return `${result}alloca ${instr.shape ?? instr.type}, align 4`;
     case 'load':
       return `${result}load ${instr.type}, ${typedOperandText(module, instr.operands[0], 'ptr')}, align 4`;
     case 'store': {
@@ -45,6 +59,11 @@ export function renderInstr(module: IRModule, instr: IRInstr): string {
     case 'sdiv':
     case 'srem':
       return `${result}${instr.opcode} ${instr.type} ${ops[0]}, ${ops[1]}`;
+    case 'ptradd':
+      // Our dialect's simplified `getelementptr`: one cell per element.
+      return `${result}ptradd ${typedOperandText(module, instr.operands[0], 'ptr')}, ${typedOperandText(module, instr.operands[1], 'i32')}`;
+    case 'ptrdiff':
+      return `${result}ptrdiff ${typedOperandText(module, instr.operands[0], 'ptr')}, ${typedOperandText(module, instr.operands[1], 'ptr')}`;
     case 'icmp':
       return `${result}icmp ${instr.predicate ?? 'ne'} i32 ${ops[0]}, ${ops[1]}`;
     case 'zext':
@@ -57,7 +76,9 @@ export function renderInstr(module: IRModule, instr: IRInstr): string {
       return `ret ${instr.type} ${ops[0]}`;
     case 'call': {
       const args = instr.operands
-        .map((operand) => typedOperandText(module, operand, 'i32'))
+        .map((operand, index) =>
+          typedOperandText(module, operand, callArgType(module, instr, operand, index)),
+        )
         .join(', ');
       const call = `call ${instr.type} @${instr.callee ?? ''}(${args})`;
       return instr.result !== undefined ? `${result}${call}` : call;
@@ -65,6 +86,48 @@ export function renderInstr(module: IRModule, instr: IRInstr): string {
     case 'unreachable':
       return `unreachable`;
   }
+}
+
+/**
+ * The printed type of one call argument.
+ *
+ * String literals are `ptr`, declared callees give the parameter types, and the
+ * four built-ins (`malloc`, `free`, `delete`, `printf`/`print`) are known by
+ * name — everything else falls back to `i32`, which is what every remaining
+ * value in this dialect is.
+ */
+function callArgType(
+  module: IRModule,
+  instr: IRInstr,
+  operand: IROperand,
+  index: number,
+): string {
+  if (operand.kind === 'string' || operand.kind === 'global') return 'ptr';
+  const callee = module.functions.find((fn) => fn.name === instr.callee);
+  if (callee !== undefined && index < callee.params.length) return callee.params[index].type;
+  if (instr.callee === 'free' || instr.callee === 'delete') return 'ptr';
+  return 'i32';
+}
+
+/** Import the shapes used by the printer only. */
+import type { IRGlobal } from './types';
+
+/**
+ * The right-hand side of a global definition.
+ *
+ * Scalars print exactly as before (`i32 0`); arrays and records print their
+ * shape and either `zeroinitializer` or the cell list. Very long lists are
+ * elided with `...` — this listing is never assembled or parsed back.
+ */
+function globalText(global: IRGlobal): string {
+  const cells = global.cells ?? 1;
+  if (cells === 1) return `i32 ${global.init}`;
+  const inits = global.inits;
+  const values = inits ?? [];
+  if (!values.some((value) => value !== 0)) return `[${cells} x i32] zeroinitializer`;
+  const shown = values.slice(0, 64).map((value) => `i32 ${value}`);
+  if (values.length > 64) shown.push('...');
+  return `[${cells} x i32] [${shown.join(', ')}]`;
 }
 
 /**
@@ -85,9 +148,9 @@ export function printIR(module: IRModule): IRLine[] {
     lines.push({ lineNo: (lineNo += 1), text, ...extra });
   };
 
-  // Globals first: `@g = global i32 <init>`.
+  // Globals first: `@g = global i32 <init>`, or `[N x i32]` for arrays/records.
   for (const global of module.globals) {
-    push(`@${global.name} = global i32 ${global.init}`);
+    push(`@${global.name} = global ${globalText(global)}`);
   }
   if (module.globals.length > 0 && module.functions.length > 0) push('');
 

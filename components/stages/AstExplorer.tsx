@@ -38,6 +38,7 @@ import { computeHighlights, createEmptyHighlights, selectionTint } from '@/lib/h
 import { positionAt } from '@/lib/positions';
 import { useWorkspaceStore } from '@/lib/store';
 import type { Ast, AstNode, Type } from '@/lib/compiler/types';
+import { typeToString } from '@/lib/compiler/typeutil';
 import { cn } from '@/lib/utils';
 
 type ViewMode = 'graph' | 'outline';
@@ -64,7 +65,9 @@ function formatType(type: Type): string {
       .map(formatType)
       .join(', ')})`;
   }
-  return type.kind;
+  // Every other kind prints the way the program spelled it: `int *`, `int[5]`,
+  // `struct Point`, `union Value`.
+  return typeToString(type);
 }
 
 interface AstOutlineProps {

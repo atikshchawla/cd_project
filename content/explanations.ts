@@ -1,4 +1,5 @@
-import type { AstKind, Stage, TokenKind } from '@/lib/compiler/types';
+import { typeToString as describeType } from '@/lib/compiler/typeutil';
+import type { AstKind, IROpcode, Stage, TokenKind, Type } from '@/lib/compiler/types';
 
 export interface StageExplanation {
   label: string;
@@ -152,6 +153,7 @@ export const TOKEN_KIND_ORDER: TokenKind[] = [
   'keyword',
   'identifier',
   'integer-literal',
+  'string-literal',
   'operator',
   'punctuator',
   'directive',
@@ -172,6 +174,11 @@ export const TOKEN_KIND_EXPLANATIONS: Record<TokenKind, TokenKindExplanation> = 
     label: 'Integer literal',
     simple:
       'A whole number written directly in the source. Mini-C integers are 32-bit signed values.',
+  },
+  'string-literal': {
+    label: 'String literal',
+    simple:
+      'Text between double quotes, used as the format of printf. Escapes such as \\n and \\t are resolved by the parser.',
   },
   operator: {
     label: 'Operator',
@@ -305,6 +312,51 @@ export const AST_KIND_EXPLANATIONS: Record<AstKind, AstKindExplanation> = {
     label: 'Parenthesised expression',
     simple: 'Parentheses that keep an inner expression together on purpose.',
   },
+  StringLiteral: {
+    label: 'String literal',
+    simple:
+      'Text between double quotes. Only printf uses one, as its format; the node holds the decoded text with escapes resolved.',
+  },
+  ArraySubscriptExpr: {
+    label: 'Array subscript',
+    simple: 'One element of an array or pointer: base[index]. Indexing checks the bounds at run time.',
+  },
+  MemberExpr: {
+    label: 'Field access',
+    simple:
+      'One field of a record: value.field through a struct, or pointer->field through a pointer to one.',
+  },
+  InitListExpr: {
+    label: 'Initialiser list',
+    simple: 'A brace-separated { ... } list that fills an array or a record, missing values stay zero.',
+  },
+  RecordDecl: {
+    label: 'Record declaration',
+    simple: 'A struct or union definition: the fields it holds and how many cells they occupy.',
+  },
+  FieldDecl: {
+    label: 'Field declaration',
+    simple: 'One field of a struct or union: its type, its name and its offset inside the record.',
+  },
+  SizeOfExpr: {
+    label: 'sizeof expression',
+    simple: 'How many cells a type occupies. It is folded to a constant during semantic analysis.',
+  },
+  NewExpr: {
+    label: 'new expression',
+    simple:
+      'Allocates one object (new T) or an array (new T[n]) on the heap and evaluates to a pointer to it.',
+  },
+  DeleteStmt: {
+    label: 'delete statement',
+    simple:
+      'Releases a block that new allocated. Deleting null or an already-released block stops the program.',
+  },
+  PrintStmt: {
+    label: 'print / printf statement',
+    simple:
+      'Writes a value with print, or a formatted string with printf, to the output of the running program.',
+  },
 };
 
 export const AST_GRAPH_LABEL = 'Graph';
@@ -393,9 +445,9 @@ export const SYMBOL_KIND_EXPLANATIONS: Record<string, string> = {
 export const SYMBOL_NOT_FOUND =
   'This symbol is not part of the current compile result. Select a row again.';
 
-export function typeToString(type: { kind: string } | undefined): string {
+export function typeToString(type: Type | undefined): string {
   if (type === undefined) return 'unknown';
-  return type.kind;
+  return describeType(type);
 }
 
 // ---------------------------------------------------------------------------
@@ -431,19 +483,19 @@ export interface IROpcodeExplanation {
   simple: string;
 }
 
-export const IROPCODE_EXPLANATIONS: Record<string, IROpcodeExplanation> = {
+export const IROPCODE_EXPLANATIONS: Record<IROpcode, IROpcodeExplanation> = {
   alloca: {
     label: 'alloca',
     simple:
-      'Reserves one stack slot for a variable. The slot lives until the function returns.',
+      'Reserves stack cells for a variable — one cell for an int or a pointer, several for an array or a struct. The slot lives until the function returns.',
   },
   load: {
     label: 'load',
-    simple: 'Reads the current value stored in a stack slot or global variable.',
+    simple: 'Reads the cell at an address: a variable, one element of an array or one field of a struct.',
   },
   store: {
     label: 'store',
-    simple: 'Writes a value into a stack slot or global variable.',
+    simple: 'Writes a value into the cell at an address, which may be a variable or a computed location.',
   },
   add: {
     label: 'add',
@@ -484,9 +536,20 @@ export const IROPCODE_EXPLANATIONS: Record<string, IROpcodeExplanation> = {
     label: 'ret',
     simple: 'Returns a value (or nothing, for void) to the caller and leaves the function.',
   },
+  ptradd: {
+    label: 'ptradd',
+    simple:
+      'Adds a cell offset to an address: base + index * element size. It is how arrays, fields and pointer arithmetic are computed.',
+  },
+  ptrdiff: {
+    label: 'ptrdiff',
+    simple:
+      'Subtracts two addresses that live in the same block and yields how many cells apart they are.',
+  },
   call: {
     label: 'call',
-    simple: 'Calls a function with typed arguments and receives its return value.',
+    simple:
+      'Calls a function with typed arguments and receives its return value. malloc, free, delete, print and printf are built in.',
   },
   unreachable: {
     label: 'unreachable',
@@ -537,13 +600,17 @@ export const DIAGNOSTIC_CODE_EXPLANATIONS: Record<string, DiagnosticCodeExplanat
     title: 'Unterminated block comment',
     why: 'A /* comment was opened but never closed with */. Either close it or remove the opening /*.',
   },
+  E1003: {
+    title: 'Unterminated string literal',
+    why: 'A " was opened but never closed before the end of the line. printf formats are written as "text", with escapes such as \\n inside them.',
+  },
   E1004: {
     title: 'Integer literal too large',
     why: 'Mini-C integers are 32-bit signed values, so the largest literal is 2147483647.',
   },
   E1010: {
     title: 'Unsupported construct',
-    why: 'The construct uses a feature outside the supported Mini-C subset (for example char, strings, arrays, pointers, floats, structs or do-while). The message lists what is supported instead.',
+    why: 'The construct uses a feature outside the supported Mini-C subset (for example char, floats, ternary ?:, bitwise operators or do-while). The message lists what is supported instead.',
   },
   E2001: {
     title: 'Expected a token',
@@ -563,11 +630,15 @@ export const DIAGNOSTIC_CODE_EXPLANATIONS: Record<string, DiagnosticCodeExplanat
   },
   E3003: {
     title: 'Incompatible types',
-    why: 'Mini-C has only int and void. void is not a value: it cannot be assigned or used where an int is required, and only int expressions can be assigned.',
+    why: 'Types must fit where they are used: int and pointers are values, void is not a value at all, records are used through their fields, and only a { ... } list can initialise an array or a record.',
   },
   E3004: {
     title: 'Wrong number of arguments',
     why: 'The call passes a different number of arguments than the function declares. The message shows both counts.',
+  },
+  E3005: {
+    title: 'No such member',
+    why: 'The struct or union has no field with that name. The message lists the fields it does define.',
   },
   E3006: {
     title: 'break/continue outside a loop',
@@ -575,7 +646,7 @@ export const DIAGNOSTIC_CODE_EXPLANATIONS: Record<string, DiagnosticCodeExplanat
   },
   E3009: {
     title: 'Return value mismatch',
-    why: 'A void function must return without a value; a non-void function must return an int. Falling off the end of a non-void function is also reported as a warning (W4002).',
+    why: 'A void function must return without a value; a function that returns int or a pointer must return a value of that type. Falling off the end of a non-void function is also reported as a warning (W4002).',
   },
   W4001: {
     title: 'Unused variable',
@@ -670,7 +741,11 @@ export const EXEC_DATA_TITLE = 'Data segment (globals)';
 export const EXEC_DATA_EMPTY = 'This program has no global variables.';
 export const EXEC_HEAP_TITLE = 'Heap';
 export const EXEC_HEAP_EMPTY =
-  'Mini-C has no dynamic allocation, so the heap stays empty. Everything lives on the stack or in globals.';
+  'Nothing has been allocated yet. malloc, new, free and delete reserve and release the blocks shown here.';
+export const EXEC_HEAP_FREED = 'released';
+export const EXEC_OUTPUT_TITLE = 'Program output';
+export const EXEC_OUTPUT_EMPTY =
+  'print and printf have not written anything at this step.';
 export const EXEC_MEMORY_TITLE = 'Memory';
 export const EXEC_STACK_DEPTH = (frames: number): string =>
   `${frames} frame${frames === 1 ? '' : 's'}`;

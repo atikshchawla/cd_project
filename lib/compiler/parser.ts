@@ -1,4 +1,4 @@
-import type { Ast, AstKind, AstNode, Diagnostic, Range, Token } from './types';
+import type { Ast, AstKind, AstNode, Diagnostic, Range, Token, TypeRef } from './types';
 
 export interface ParseResult {
   ast: Ast | null;
@@ -15,9 +15,19 @@ const SUPPORTED_KEYWORDS = new Set([
   'return',
   'break',
   'continue',
+  'struct',
+  'union',
+  'sizeof',
+  'new',
+  'delete',
+  'print',
+  'printf',
 ]);
 
 const ASSIGN_OPERATORS = new Set(['=', '+=', '-=', '*=', '/=', '%=']);
+
+/** Largest array (and heap block) this dialect will reserve, in cells. */
+const MAX_CELLS = 100000;
 
 class ParseAbort extends Error {
   constructor(readonly diagnostic: Diagnostic) {
@@ -25,9 +35,65 @@ class ParseAbort extends Error {
   }
 }
 
-function isSupportedTypeKeyword(text: string): boolean {
-  return text === 'int' || text === 'void';
+/**
+ * Decode a `"..."` token's contents (without the quotes).
+ *
+ * The standard C escapes are resolved and an unknown escape keeps its
+ * backslash, exactly like the reference implementation's `unicode_escape`.
+ */
+function decodeEscapes(body: string): string {
+  let out = '';
+  for (let i = 0; i < body.length; i += 1) {
+    const char = body[i];
+    if (char !== '\\') {
+      out += char;
+      continue;
+    }
+    i += 1;
+    if (i >= body.length) {
+      out += '\\';
+      break;
+    }
+    const escaped = body[i];
+    switch (escaped) {
+      case 'n':
+        out += '\n';
+        break;
+      case 't':
+        out += '\t';
+        break;
+      case 'r':
+        out += '\r';
+        break;
+      case '0':
+        out += '\0';
+        break;
+      case 'a':
+        out += '\x07';
+        break;
+      case 'b':
+        out += '\b';
+        break;
+      case 'f':
+        out += '\f';
+        break;
+      case 'v':
+        out += '\v';
+        break;
+      case '\\':
+      case '"':
+      case "'":
+        out += escaped;
+        break;
+      default:
+        out += `\\${escaped}`;
+    }
+  }
+  return out;
 }
+
+/** Type keywords Mini-C understands (as opposed to reserved words). */
+const TYPE_KEYWORDS = new Set(['int', 'void', 'struct', 'union']);
 
 /** Hand-written recursive-descent parser for Mini-C (§6.2). Never throws. */
 export function parse(tokens: Token[], source: string): ParseResult {
@@ -118,7 +184,7 @@ export function parse(tokens: Token[], source: string): ParseResult {
         [
           {
             message:
-              'Supported types are int and void. Supported statements are blocks, if/else, while, for, return, break and continue.',
+              'Supported types are int, void, pointers, arrays, struct and union. Supported statements include blocks, if/else, while, for, delete, print/printf, return, break and continue.',
           },
         ],
       ),
@@ -179,6 +245,108 @@ export function parse(tokens: Token[], source: string): ParseResult {
     end: endOffset,
   });
 
+  // ---- Type specs and declarators -----------------------------------------
+
+  interface TypeSpec {
+    base: 'int' | 'void' | 'struct' | 'union';
+    tag?: string;
+    token: Token;
+  }
+
+  interface Declarator {
+    nameToken: Token;
+    typeRef: TypeRef;
+  }
+
+  /** Does this token start a declaration (`int`, `void`, `struct X`, `union X`)? */
+  const isTypeStart = (token: Token | undefined): boolean =>
+    token !== undefined && token.kind === 'keyword' && TYPE_KEYWORDS.has(token.text);
+
+  /** Consumes `int` / `void` / `struct Name` / `union Name`. */
+  const parseTypeSpec = (context: string): TypeSpec => {
+    const token = current();
+    if (token === undefined) return expectedError("'int'", context);
+    assertSupported(token);
+    if (token.kind !== 'keyword' || !TYPE_KEYWORDS.has(token.text)) {
+      return expectedError("'int'", context);
+    }
+    advance();
+    if (token.text === 'struct' || token.text === 'union') {
+      const tag = current();
+      if (tag === undefined || tag.kind !== 'identifier') {
+        return expectedError('identifier', `after '${token.text}'`);
+      }
+      advance();
+      return { base: token.text, tag: tag.text, token };
+    }
+    return { base: token.text as 'int' | 'void', token };
+  };
+
+  /** An array size must be an integer literal: this dialect sizes arrays statically. */
+  const parseArraySize = (): number => {
+    const token = current();
+    if (token === undefined || token.kind !== 'integer-literal') {
+      assertSupported(token);
+      throw new ParseAbort(
+        makeDiagnostic(
+          'E1010',
+          'unsupported',
+          'Array sizes must be written as integer literals.',
+          token?.range ?? eofRange(),
+          [
+            {
+              message:
+                'Variables and expressions are not allowed between [ and ]; Mini-C sizes every array at compile time.',
+            },
+          ],
+        ),
+      );
+    }
+    advance();
+    const size = Number(token.text);
+    if (!Number.isSafeInteger(size) || size > MAX_CELLS) {
+      throw new ParseAbort(
+        makeDiagnostic('E1010', 'unsupported', `Array size ${token.text} is too large.`, token.range, [
+          { message: `An array reserves at most ${MAX_CELLS} cells (400 000 bytes).` },
+        ]),
+      );
+    }
+    return size;
+  };
+
+  /** Consumes `*`* name `[n]`... after a type spec. */
+  const parseDeclarator = (spec: TypeSpec, context: string): Declarator => {
+    let stars = 0;
+    while (match('*')) stars += 1;
+    const nameToken = expectIdentifier(context);
+    const dims: number[] = [];
+    while (check('[')) {
+      advance();
+      dims.push(parseArraySize());
+      expect(']', 'to close the array size');
+    }
+    return { nameToken, typeRef: { base: spec.base, tag: spec.tag, stars, dims } };
+  };
+
+  /** `{ e1, e2, ... }`, nested for multi-dimensional initialisers. */
+  const parseInitList = (): number => {
+    const open = expect('{', 'to start an initialiser list');
+    const listId = createNode('InitListExpr');
+    if (!check('}')) {
+      while (true) {
+        attach(listId, check('{') ? parseInitList() : parseAssign());
+        if (!match(',')) break;
+        if (check('}')) break; // trailing comma
+      }
+    }
+    const close = expect('}', 'to close the initialiser list');
+    setRange(listId, rangeBetween(open.range.start, close.range.end));
+    return listId;
+  };
+
+  /** The right-hand side of `=`, which may be an initialiser list. */
+  const parseInitializer = (): number => (check('{') ? parseInitList() : parseAssign());
+
   const translationUnit = (): Ast => {
     const rootId = createNode('TranslationUnit', { start: 0, end: source.length });
     while (!isAtEnd()) {
@@ -190,17 +358,30 @@ export function parse(tokens: Token[], source: string): ParseResult {
   const externalDeclaration = (): number => {
     const token = current();
     assertSupported(token);
-    if (token === undefined || !isSupportedTypeKeyword(token.text)) {
+    if (token === undefined || !isTypeStart(token)) {
       return unexpected('at file scope');
     }
-    const typeToken = advance();
-    const nameToken = expectIdentifier(`after '${typeToken.text}'`);
+
+    // `struct Point { ... };` / `union Bits { ... };` — a type definition, not a
+    // declaration, is recognised by the `{` straight after the tag.
+    if (
+      (token.text === 'struct' || token.text === 'union') &&
+      program[position + 1]?.kind === 'identifier' &&
+      program[position + 2]?.text === '{'
+    ) {
+      return recordDeclaration();
+    }
+
+    const spec = parseTypeSpec('at file scope');
+    const declarator = parseDeclarator(spec, `after '${spec.token.text}'`);
+    const { nameToken, typeRef } = declarator;
 
     if (check('(')) {
       // Function definition or prototype.
-      const functionId = createNode('FunctionDecl', rangeBetween(typeToken.range.start, 0), {
+      const functionId = createNode('FunctionDecl', rangeBetween(spec.token.range.start, 0), {
         name: nameToken.text,
-        declRet: typeToken.text === 'void' ? 'void' : 'int',
+        declRet: typeRef.base === 'void' && typeRef.stars === 0 ? 'void' : 'int',
+        typeRef,
       });
       advance(); // '('
       parseParameters(functionId);
@@ -208,27 +389,67 @@ export function parse(tokens: Token[], source: string): ParseResult {
       if (check('{')) {
         const bodyId = parseCompound();
         attach(functionId, bodyId);
-        setRange(functionId, rangeBetween(typeToken.range.start, nodes[bodyId].range.end));
+        setRange(functionId, rangeBetween(spec.token.range.start, nodes[bodyId].range.end));
       } else {
         const semi = expect(';', 'after function declaration');
-        setRange(functionId, rangeBetween(typeToken.range.start, semi.range.end));
+        setRange(functionId, rangeBetween(spec.token.range.start, semi.range.end));
       }
       return functionId;
     }
 
     // Global variable declaration.
-    const variableId = createNode('VarDecl', rangeBetween(typeToken.range.start, 0), {
+    const variableId = createNode('VarDecl', rangeBetween(spec.token.range.start, 0), {
       name: nameToken.text,
+      typeRef,
     });
     let endOffset = nameToken.range.end;
     if (match('=')) {
-      const initId = parseAssign();
+      const initId = parseInitializer();
       attach(variableId, initId);
       endOffset = nodes[initId].range.end;
     }
     expect(';', 'after global declaration');
-    setRange(variableId, rangeBetween(typeToken.range.start, endOffset));
+    setRange(variableId, rangeBetween(spec.token.range.start, endOffset));
     return variableId;
+  };
+
+  const recordDeclaration = (): number => {
+    const keywordToken = advance(); // struct | union
+    const tagToken = advance(); // the tag name (checked by the caller)
+    expect('{', `to start the body of '${keywordToken.text} ${tagToken.text}'`);
+    const recordId = createNode('RecordDecl', rangeBetween(keywordToken.range.start, 0), {
+      name: tagToken.text,
+      op: keywordToken.text,
+    });
+    while (!check('}')) {
+      if (isAtEnd()) unexpected('in the record body');
+      attach(recordId, fieldDeclaration());
+    }
+    expect('}', 'to close the record body');
+    const semi = expect(';', `after '}' closing ${keywordToken.text} ${tagToken.text}`);
+    setRange(recordId, rangeBetween(keywordToken.range.start, semi.range.end));
+    return recordId;
+  };
+
+  const fieldDeclaration = (): number => {
+    const spec = parseTypeSpec('in a record field');
+    const { nameToken, typeRef } = parseDeclarator(spec, `after '${spec.token.text}' in a record field`);
+    if (typeRef.stars > 0 && typeRef.dims.length > 0) {
+      throw new ParseAbort(
+        makeDiagnostic(
+          'E1010',
+          'unsupported',
+          'Record fields may be pointers or arrays, but not arrays of pointers.',
+          nameToken.range,
+        ),
+      );
+    }
+    const semi = expect(';', 'after the field declaration');
+    return createNode(
+      'FieldDecl',
+      rangeBetween(spec.token.range.start, semi.range.end),
+      { name: nameToken.text, typeRef },
+    );
   };
 
   const parseParameters = (functionId: number): void => {
@@ -239,16 +460,12 @@ export function parse(tokens: Token[], source: string): ParseResult {
     }
 
     while (true) {
-      const token = current();
-      if (token === undefined || token.text !== 'int') {
-        expectedError("'int'", 'in parameter list');
-      }
-      const typeToken = advance();
-      const nameToken = expectIdentifier("after 'int' in parameter list");
+      const spec = parseTypeSpec('in parameter list');
+      const { nameToken, typeRef } = parseDeclarator(spec, `after '${spec.token.text}' in parameter list`);
       const paramId = createNode(
         'ParamDecl',
-        rangeBetween(typeToken.range.start, nameToken.range.end),
-        { name: nameToken.text },
+        rangeBetween(spec.token.range.start, nameToken.range.end),
+        { name: nameToken.text, typeRef },
       );
       attach(functionId, paramId);
       if (!match(',')) break;
@@ -261,7 +478,7 @@ export function parse(tokens: Token[], source: string): ParseResult {
 
     while (!check('}')) {
       if (isAtEnd()) unexpected('in block');
-      if (check('int')) {
+      if (isTypeStart(current())) {
         attach(blockId, declaration());
       } else {
         attach(blockId, statement());
@@ -273,19 +490,20 @@ export function parse(tokens: Token[], source: string): ParseResult {
   };
 
   const declaration = (): number => {
-    const typeToken = expect('int', 'in declaration');
-    const nameToken = expectIdentifier("after 'int' in declaration");
-    const variableId = createNode('VarDecl', rangeBetween(typeToken.range.start, 0), {
+    const spec = parseTypeSpec('in declaration');
+    const { nameToken, typeRef } = parseDeclarator(spec, `after '${spec.token.text}' in declaration`);
+    const variableId = createNode('VarDecl', rangeBetween(spec.token.range.start, 0), {
       name: nameToken.text,
+      typeRef,
     });
     let endOffset = nameToken.range.end;
     if (match('=')) {
-      const initId = parseAssign();
+      const initId = parseInitializer();
       attach(variableId, initId);
       endOffset = nodes[initId].range.end;
     }
     expect(';', 'after declaration');
-    setRange(variableId, rangeBetween(typeToken.range.start, endOffset));
+    setRange(variableId, rangeBetween(spec.token.range.start, endOffset));
     return variableId;
   };
 
@@ -295,6 +513,34 @@ export function parse(tokens: Token[], source: string): ParseResult {
     if (token === undefined) return unexpected('where a statement was expected');
 
     if (token.text === '{') return parseCompound();
+
+    // A declaration may appear wherever a statement may (as in the reference).
+    if (isTypeStart(token)) return declaration();
+
+    if (token.text === 'delete') {
+      const keywordToken = advance();
+      const deleteId = createNode('DeleteStmt');
+      attach(deleteId, parseExpression());
+      const semi = expect(';', "after the operand of 'delete'");
+      setRange(deleteId, rangeBetween(keywordToken.range.start, semi.range.end));
+      return deleteId;
+    }
+
+    if (token.text === 'print' || token.text === 'printf') {
+      const keywordToken = advance();
+      const printId = createNode('PrintStmt', rangeBetween(keywordToken.range.start, 0), {
+        op: keywordToken.text,
+      });
+      expect('(', `after '${keywordToken.text}'`);
+      if (!check(')')) {
+        attach(printId, parseAssign());
+        while (match(',')) attach(printId, parseAssign());
+      }
+      expect(')', `to close the '${keywordToken.text}' argument list`);
+      const semi = expect(';', `after '${keywordToken.text}'`);
+      setRange(printId, rangeBetween(keywordToken.range.start, semi.range.end));
+      return printId;
+    }
 
     if (token.text === 'if') {
       const ifToken = advance();
@@ -374,7 +620,7 @@ export function parse(tokens: Token[], source: string): ParseResult {
     const forId = createNode('ForStmt');
     expect('(', "after 'for'");
 
-    if (check('int')) {
+    if (isTypeStart(current())) {
       const initId = declaration();
       nodes[initId].forRole = 'init';
       attach(forId, initId);
@@ -472,9 +718,16 @@ export function parse(tokens: Token[], source: string): ParseResult {
 
   const parseUnary = (): number => {
     const token = current();
+
     if (
       token !== undefined &&
-      (token.text === '-' || token.text === '!' || token.text === '++' || token.text === '--')
+      (token.text === '-' ||
+        token.text === '+' ||
+        token.text === '!' ||
+        token.text === '++' ||
+        token.text === '--' ||
+        token.text === '&' ||
+        token.text === '*')
     ) {
       advance();
       const unaryId = createNode('UnaryOperator', rangeBetween(token.range.start, 0), {
@@ -482,12 +735,44 @@ export function parse(tokens: Token[], source: string): ParseResult {
       });
       attach(unaryId, parseUnary());
       const operandId = nodes[unaryId].childIds[0];
-      setRange(
-        unaryId,
-        rangeBetween(token.range.start, nodes[operandId].range.end),
-      );
+      setRange(unaryId, rangeBetween(token.range.start, nodes[operandId].range.end));
       return unaryId;
     }
+
+    if (token !== undefined && token.text === 'sizeof') {
+      advance();
+      expect('(', "after 'sizeof'");
+      const spec = parseTypeSpec("after '(' in sizeof");
+      let stars = 0;
+      while (match('*')) stars += 1;
+      const close = expect(')', "to close 'sizeof'");
+      return createNode('SizeOfExpr', rangeBetween(token.range.start, close.range.end), {
+        typeRef: { base: spec.base, tag: spec.tag, stars, dims: [] },
+      });
+    }
+
+    if (token !== undefined && token.text === 'new') {
+      const newToken = advance();
+      const spec = parseTypeSpec("after 'new'");
+      const typeRef: TypeRef = { base: spec.base, tag: spec.tag, stars: 0, dims: [] };
+      if (check('[')) {
+        advance();
+        const countId = parseExpression();
+        const close = expect(']', 'to close the new[] count');
+        const newId = createNode(
+          'NewExpr',
+          rangeBetween(newToken.range.start, close.range.end),
+          { op: 'new[]', typeRef },
+        );
+        attach(newId, countId);
+        return newId;
+      }
+      return createNode('NewExpr', rangeBetween(newToken.range.start, spec.token.range.end), {
+        op: 'new',
+        typeRef,
+      });
+    }
+
     return parsePostfix();
   };
 
@@ -522,6 +807,31 @@ export function parse(tokens: Token[], source: string): ParseResult {
         currentId = unaryId;
         continue;
       }
+      if (token !== undefined && token.text === '[') {
+        advance();
+        const indexId = parseExpression();
+        const close = expect(']', 'to close the subscript');
+        const subscriptId = createNode(
+          'ArraySubscriptExpr',
+          rangeBetween(nodes[currentId].range.start, close.range.end),
+        );
+        attach(subscriptId, currentId);
+        attach(subscriptId, indexId);
+        currentId = subscriptId;
+        continue;
+      }
+      if (token !== undefined && (token.text === '.' || token.text === '->')) {
+        advance();
+        const memberToken = expectIdentifier(`after '${token.text}'`);
+        const memberId = createNode(
+          'MemberExpr',
+          rangeBetween(nodes[currentId].range.start, memberToken.range.end),
+          { op: token.text, name: memberToken.text },
+        );
+        attach(memberId, currentId);
+        currentId = memberId;
+        continue;
+      }
       break;
     }
     return currentId;
@@ -539,6 +849,12 @@ export function parse(tokens: Token[], source: string): ParseResult {
     if (token.kind === 'integer-literal') {
       advance();
       return createNode('IntegerLiteral', token.range, { value: Number(token.text) });
+    }
+    if (token.kind === 'string-literal') {
+      advance();
+      const raw = token.text;
+      const body = raw.length >= 2 && raw.endsWith('"') ? raw.slice(1, -1) : raw.slice(1);
+      return createNode('StringLiteral', token.range, { stringValue: decodeEscapes(body) });
     }
     if (token.text === '(') {
       advance();

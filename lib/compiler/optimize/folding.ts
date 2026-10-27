@@ -34,7 +34,11 @@ function constValueAt(operand: IROperand | undefined): number | null {
  * Returns null when the opcode is not a pure constant expression. Every
  * arithmetic helper and the `icmp` comparison are the exact ones the simulator
  * uses, so a folded program computes what the interpreter would have computed —
- * including 32-bit wrap-around and `x / 0 == 0`.
+ * including 32-bit wrap-around.
+ *
+ * Division and remainder by a literal zero are deliberately *not* folded: the
+ * interpreter reports `Runtime error: division by zero` for them, so turning
+ * `6 / 0` into `0` would change what the program does.
  */
 function foldValue(instr: IRInstr): number | null {
   const a = constValueAt(instr.operands[0]);
@@ -48,9 +52,9 @@ function foldValue(instr: IRInstr): number | null {
     case 'mul':
       return a === null || b === null ? null : mul32(a, b);
     case 'sdiv':
-      return a === null || b === null ? null : div32(a, b);
     case 'srem':
-      return a === null || b === null ? null : rem32(a, b);
+      if (a === null || b === null || b === 0) return null;
+      return instr.opcode === 'sdiv' ? div32(a, b) : rem32(a, b);
     case 'icmp':
       return a === null || b === null
         ? null
@@ -59,6 +63,9 @@ function foldValue(instr: IRInstr): number | null {
           : 0;
     case 'zext':
       return a === null ? null : a !== 0 ? 1 : 0;
+    case 'ptradd':
+      // Two literal addresses add exactly like two literal integers.
+      return a === null || b === null ? null : wrap32(a + b);
     default:
       return null;
   }

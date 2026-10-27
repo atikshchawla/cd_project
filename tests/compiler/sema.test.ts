@@ -178,4 +178,56 @@ describe('semantic analysis', () => {
     expect(result.symbols).toBeNull();
     expect(result.completed.sema).toBe('blocked');
   });
+
+  it('E1010: a global initialiser must be a literal or a { } list of them', () => {
+    const expression = analyseCode('int g = 1 + 2;\nint main() { return g; }');
+    expect(codesOf(errorsOf(expression))).toEqual(['E1010']);
+    expect(errorsOf(expression)[0].stage).toBe('sema');
+    expect(errorsOf(expression)[0].message).toContain('global initialiser');
+    expect(expression.completed).toMatchObject({ sema: 'failed', ir: 'blocked' });
+
+    const nested = analyseCode('int g[2] = {1, 1 + 1};\nint main() { return g[0]; }');
+    expect(codesOf(errorsOf(nested))).toEqual(['E1010']);
+
+    const literal = analyseCode('int g = 7;\nint g2[3] = {1, 2, 3};\nint main() { return g + g2[0]; }');
+    expect(errorsOf(literal)).toEqual([]);
+    expect(literal.completed.ir).toBe('ok');
+  });
+
+  it('decays array parameters to pointers and accepts pointer conditions', () => {
+    const result = analyseCode(`
+void f(int a[3]) {
+  a[0] = 1;
+}
+int main() {
+  int x = 0;
+  int *p = &x;
+  if (p) {
+    f(&x);
+  }
+  while (p != 0) {
+    p = 0;
+  }
+  return 0;
+}
+`);
+    expect(errorsOf(result)).toEqual([]);
+    const param = result.symbols!.symbols.find((symbol) => symbol.name === 'a')!;
+    expect(param.kind).toBe('param');
+    expect(param.type).toEqual({ kind: 'pointer', pointee: { kind: 'int' } });
+  });
+
+  it('E3003: a whole record cannot be copied by assignment', () => {
+    const result = analyseCode(`
+struct Point { int x; int y; };
+int main() {
+  struct Point a = {1, 2};
+  struct Point b;
+  b = a;
+  return 0;
+}
+`);
+    expect(codesOf(errorsOf(result))).toEqual(['E3003']);
+    expect(errorsOf(result)[0].message).toContain("cannot assign a whole 'struct Point'");
+  });
 });

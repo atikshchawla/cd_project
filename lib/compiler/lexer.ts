@@ -16,9 +16,15 @@ const KEYWORDS = new Set([
   'return',
   'break',
   'continue',
+  'struct',
+  'union',
+  'sizeof',
+  'new',
+  'delete',
+  'print',
+  'printf',
   // Reserved words that the parser reports as unsupported (E1010).
   'char',
-  'struct',
   'float',
   'double',
   'long',
@@ -29,14 +35,10 @@ const KEYWORDS = new Set([
   'goto',
   'typedef',
   'enum',
-  'union',
   'static',
   'const',
-  'sizeof',
   'do',
   'class',
-  'new',
-  'delete',
   'namespace',
   'template',
 ]);
@@ -44,6 +46,7 @@ const KEYWORDS = new Set([
 const TWO_CHAR_OPERATORS = new Set([
   '++',
   '--',
+  '->',
   '+=',
   '-=',
   '*=',
@@ -57,22 +60,17 @@ const TWO_CHAR_OPERATORS = new Set([
   '||',
 ]);
 
-const ONE_CHAR_OPERATORS = new Set(['+', '-', '*', '/', '%', '<', '>', '=', '!']);
-const PUNCTUATORS = new Set(['(', ')', '{', '}', ';', ',']);
+const ONE_CHAR_OPERATORS = new Set(['+', '-', '*', '/', '%', '<', '>', '=', '!', '&']);
+const PUNCTUATORS = new Set(['(', ')', '{', '}', '[', ']', ';', ',', '.']);
 
 const UNSUPPORTED_CHARACTER_MESSAGES: Record<string, string> = {
-  '&': 'The & operator is not supported. Mini-C supports && but not bitwise or address-of operators.',
   '|': 'The | operator is not supported. Mini-C supports || but not bitwise or operators.',
   '^': 'The ^ operator is not supported. Mini-C has no bitwise operators.',
   '~': 'The ~ operator is not supported. Mini-C has no bitwise operators.',
   '?': 'The ternary ?: operator is not supported. Use if/else instead.',
-  ':': 'The : punctuator is not supported. Mini-C has no labels, ternary expressions or structs.',
-  '.': 'The . punctuator is not supported. Mini-C has no structs or member access.',
-  '[': 'Arrays are not supported. Mini-C supports only int and void with local/global variables and functions.',
-  ']': 'Arrays are not supported. Mini-C supports only int and void with local/global variables and functions.',
-  '"': 'String literals are not supported. Mini-C has only int and void values.',
-  "'": 'Character literals are not supported. Mini-C has only int and void values.',
-  '\\': 'Escape sequences and line continuations are not supported in Mini-C.',
+  ':': 'The : punctuator is not supported. Mini-C has no labels, ternary expressions or bitfields.',
+  "'": 'Character literals are not supported. Mini-C has int, void and format strings only.',
+  '\\': 'Escape sequences and line continuations are not supported in Mini-C source.',
   '@': 'This character is not part of Mini-C syntax.',
   '$': 'This character is not part of Mini-C syntax.',
   '`': 'This character is not part of Mini-C syntax.',
@@ -263,6 +261,39 @@ export function tokenize(source: string): LexResult {
           `Integer literal ${token.text} is too large for a 32-bit int. The maximum is 2147483647.`,
           token.range.start,
           token.range.end,
+        );
+      }
+      continue;
+    }
+
+    // String literal: a printf format such as "%d\n". The parser decodes the
+    // escapes; the token keeps the exact source text so ranges stay honest.
+    if (char === '"') {
+      const start = index;
+      const startLine = line;
+      const startCol = col;
+      advance();
+      let terminated = false;
+      while (index < text.length && text[index] !== '\n') {
+        if (text[index] === '\\' && index + 1 < text.length) {
+          advance(2);
+          continue;
+        }
+        if (text[index] === '"') {
+          advance();
+          terminated = true;
+          break;
+        }
+        advance();
+      }
+      pushToken('string-literal', start, startLine, startCol);
+      if (!terminated) {
+        pushDiagnostic(
+          'E1003',
+          'lex',
+          'Unterminated string literal: this " was never closed before the end of the line.',
+          start,
+          index,
         );
       }
       continue;

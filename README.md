@@ -49,19 +49,39 @@ bundled into the app.
 
 ## Supported Mini-C subset
 
-- Types: `int` and `void` (functions only; no pointers, arrays, or structs).
-- Declarations: global variables, function definitions with parameters, local variables with
-  optional initialisers.
-- Statements: expression statements, `if`/`else`, `while`, `for`, `break`, `continue`, `return`,
-  and blocks.
-- Expressions: integer literals, variable references, function calls, parentheses, unary `-` and
-  `!`, binary `+ - * / % < > <= >= == != && ||`, and the compound assignments
-  `+= -= *= /= %=` (plus plain `=`).
-- The lexer recognises reserved-but-unsupported keywords (`char`, `float`, `struct`, …) and
+- Types: `int`, `void` (function returns only), pointers `int *` (including `int **`), arrays
+  `int a[3]` / `int m[2][3]`, and `struct` / `union` records with named fields. A field may be a
+  pointer, an array, or another record — nesting works to any depth (`t.m.l.v`), and `struct P
+  a[3]` is an array of records.
+- Declarations: global variables with integer or `{ … }` initialisers, record declarations,
+  function definitions with parameters, local variables with optional initialisers or
+  `{ … }` lists, and `sizeof(type)`.
+- Statements: expression statements, `if`/`else`, `while`, `for`, `break`, `continue`,
+  `return`, blocks, `print(value)`, `printf("format", …)` and `delete ptr;`.
+- Expressions: integer literals, string literals (as a `printf` format), variable references,
+  array indexing `a[i]`, field access `p.x` / `p->y`, address-of `&x`, dereference `*p`,
+  pointer arithmetic (`p + n`, `p - n`, `p - q`, `p == q`, `p != q`), function calls,
+  parentheses, unary `-` and `!`, binary `+ - * / % < > <= >= == != && ||`, the compound
+  assignments `+= -= *= /= %=`, prefix/postfix `++` / `--`, and `new T` / `new T[n]`.
+- Dynamic memory: `malloc(n)` / `free(p)` and `new` / `delete` reserve and release heap
+  cells; the Execution stage lists each block (with its address range) as it is allocated and
+  struck through once it is released.
+- The lexer recognises reserved-but-unsupported keywords (`char`, `float`, `switch`, …) and
   reports them as errors rather than silently mis-lexing them.
+- Everything runs in the browser on this app's own interpreter: a program is never turned
+  into machine code and never executed natively.
 
-Not supported (reported as friendly errors, never executed): bitwise operators, addresses,
-strings, arrays, `#include`/preprocessor directives, and every other C construct.
+Not supported (each reported as a friendly error, never executed): `char` and text used as values
+outside a `printf` format, bitwise and shift operators (`&` is address-of only), the ternary `?:`,
+the comma operator, `do`/`while`, `switch`/`case`, `goto`, floating point, casts, `typedef` /
+`enum` / `const` / `static` / `extern` / `unsigned`, variable-length array sizes (`int a[n]`,
+`int a[]`, `int f(int a[][3])`, `sizeof(int[3])`), hexadecimal literals (a `0x10` is a syntax
+error) and octal notation (a leading zero is *not* octal here — `010` is the decimal ten),
+passing or
+returning a record by value, whole-record assignment, non-literal global initialisers, function
+pointers, varargs, `#define` and other preprocessor directives (`#include <…>` lines are simply
+ignored), and every other C construct outside the list above. Each one is caught at the stage
+that owns it and explained — nothing here is ever silently mis-compiled.
 
 ## Optimization
 
@@ -128,7 +148,10 @@ and asserts the optimised and unoptimised IR produce identical interpreter resul
   assembly text (Intel syntax) with exact line-to-IR mappings. It is illustrative text and is not
   assembled or executed natively.
 - The VM execution stage runs the selected IR version in a trace-first interpreter with 32-bit C
-  integer semantics, recording full stack and frame states for every step.
+  integer semantics, recording full stack and frame states for every step, plus the data segment,
+  the heap blocks (`malloc`/`new`/`free`/`delete`) and everything `print`/`printf` wrote. It
+  reports runtime failures — null dereference, use-after-free, double free, out-of-bounds index,
+  invalid or unrelated pointers, division and modulo by zero — as errors instead of guessing.
 - The optimization stage is a teaching diff: the four passes are this app's own TypeScript code,
   their before/after text is derived from the two IR modules, and the prose that explains each
   change is illustrative.
@@ -137,10 +160,14 @@ and asserts the optimised and unoptimised IR produce identical interpreter resul
 
 Errors and warnings carry stable codes with in-app explanations:
 
-- `E1xxx` — lexical errors (unsupported characters, malformed literals, reserved keywords).
+- `E1xxx` — lexical errors (unsupported characters, malformed literals, unterminated strings,
+  reserved keywords).
 - `E2xxx` — syntax errors (the parser stops at the first one).
-- `E3xxx` — semantic errors (undeclared identifiers, redefinitions, type mismatches, wrong
-  argument counts, missing returns). All semantic errors are reported, not just the first.
+- `E3xxx` — semantic errors (undeclared identifiers, redefinitions, type mismatches, unknown
+  record members, wrong argument counts, missing returns). All semantic errors are reported, not
+  just the first. Constructs this dialect deliberately does not lower — a record passed by value,
+  a non-literal global initialiser, an array with no size — come back as `E1010` with the stage
+  that found them.
 - `W4001` / `W4002` — warnings (unused variable, missing return in a non-`void` function).
   Warnings never block later stages.
 
@@ -153,8 +180,9 @@ All 8 pipeline stages and interactive features are complete:
 - Application shell with resizable panes and theme switcher (Dark, Light, Sepia, System)
 - Pipeline stage navigator and step-through execution mode
 - Monaco code editor with cross-stage highlighting and diagnostic markers
-- 24 built-in examples (17 learning programs and 7 error demonstrations), including six that
-  showcase the Optimization stage one pass at a time
+- 31 built-in examples (22 learning programs and 9 error demonstrations), including six that
+  showcase the Optimization stage one pass at a time, and programs covering arrays,
+  two-dimensional arrays, pointers and `malloc`, structs and unions, and recursion with `printf`
 - Lexer and Token Explorer (filtering, token inspector, legend)
 - Recursive-descent parser and AST Explorer (React Flow graph + accessible outline)
 - Semantic analysis with clickable symbol table, interactive Scope Tree canvas, and diagnostics
@@ -165,4 +193,6 @@ All 8 pipeline stages and interactive features are complete:
 - Naive x86-64 assembly generation with 1:1 IR line mappings and Intel syntax (original or
   optimised IR)
 - Browser-based execution simulator (VM) with reversible stepping, call frame inspection, stack/memory visualization, and output capture (original or optimised IR)
-- 191 unit and snapshot tests covering the entire pipeline
+- 241 unit and snapshot tests covering the entire pipeline, including a feature suite for arrays,
+  pointers, records, `print`/`printf` and the runtime checks, plus an optimizer-equivalence suite
+  that runs every example through all 16 pass combinations

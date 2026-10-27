@@ -36,11 +36,35 @@ export function generateAsm(module: IRModule): AsmModule {
   push('; Illustrative x86-64 assembly lowered from this app\u2019s own IR.', 'comment');
   push('; Text only \u2014 never assembled or executed by this app.', 'comment');
 
+  // printf formats live in .rodata; assign each distinct string a label now so
+  // the functions can reference them while they are being lowered.
+  const stringLabel = new Map<string, string>();
+  for (const instr of Object.values(module.instrs)) {
+    for (const operand of instr.operands) {
+      if (operand.kind === 'string' && !stringLabel.has(operand.value)) {
+        stringLabel.set(operand.value, `.LC${stringLabel.size}`);
+      }
+    }
+  }
+
   if (module.globals.length > 0) {
     push('  .data', 'directive');
     for (const global of module.globals) {
       push(`${global.name}:`, 'label');
-      push(`  .long ${global.init}`, 'directive');
+      const cells = global.cells ?? 1;
+      if (cells === 1) {
+        push(`  .long ${global.init}`, 'directive');
+      } else {
+        // Arrays and records reserve one .long per cell, chunked for readability.
+        const inits = global.inits ?? [];
+        for (let index = 0; index < cells; index += 8) {
+          const row: string[] = [];
+          for (let cell = index; cell < index + 8 && cell < cells; cell += 1) {
+            row.push(String(inits[cell] ?? 0));
+          }
+          push(`  .long ${row.join(', ')}`, 'directive');
+        }
+      }
     }
     push('  .text', 'directive');
   }
@@ -50,7 +74,15 @@ export function generateAsm(module: IRModule): AsmModule {
       push(`; declare @${fn.name} (external, not lowered)`, 'comment', { funcName: fn.name });
       continue;
     }
-    emitFunction(push, module, fn);
+    emitFunction(push, module, fn, stringLabel);
+  }
+
+  if (stringLabel.size > 0) {
+    push('  .section .rodata', 'directive');
+    for (const [text, label] of stringLabel) {
+      push(`${label}:`, 'label');
+      push(`  .string "${escapeAsm(text)}"`, 'directive');
+    }
   }
 
   return { lines };
@@ -62,11 +94,30 @@ type Push = (
   extra?: { irInstrId?: number; funcName?: string },
 ) => void;
 
-function emitFunction(push: Push, module: IRModule, fn: IRFunction): void {
-  // ---- Slot assignment: one 4-byte cell per named value, plus one ----
-  // anonymous pointee cell per alloca (the variable the pointer holds).
+/** Quote a decoded string as a GAS `.string` payload. */
+function escapeAsm(text: string): string {
+  let out = '';
+  for (const char of text) {
+    if (char === '\\') out += '\\\\';
+    else if (char === '"') out += '\\"';
+    else if (char === '\n') out += '\\n';
+    else if (char === '\r') out += '\\r';
+    else if (char === '\t') out += '\\t';
+    else out += char;
+  }
+  return out;
+}
+
+function emitFunction(
+  push: Push,
+  module: IRModule,
+  fn: IRFunction,
+  stringLabel: Map<string, string>,
+): void {
+  // ---- Slot assignment: one 4-byte cell per named value, plus the ----
+  // cell block an array/record alloca reserves in the frame.
   const slotOf = new Map<string, number>(); // value name -> rbp offset
-  const pointeeOf = new Map<string, number>(); // alloca result -> pointee offset
+  const pointeeOf = new Map<string, number>(); // alloca result -> block offset
   let stackBytes = 0;
 
   const allocSlot = (): number => {
@@ -83,7 +134,9 @@ function emitFunction(push: Push, module: IRModule, fn: IRFunction): void {
       const instr = module.instrs[instrId];
       if (instr === undefined) continue;
       if (instr.opcode === 'alloca' && instr.result !== undefined) {
-        pointeeOf.set(instr.result, allocSlot());
+        // An `int` reserves one cell; an array or struct reserves `cells`.
+        stackBytes += (instr.cells ?? 1) * 4;
+        pointeeOf.set(instr.result, stackBytes);
         slotOf.set(instr.result, allocSlot());
       } else if (instr.result !== undefined) {
         slotOf.set(instr.result, allocSlot());
@@ -120,6 +173,12 @@ function emitFunction(push: Push, module: IRModule, fn: IRFunction): void {
       case 'global':
         push(`  mov ${reg}, [${operand.name}]`, 'instruction', { irInstrId, funcName: fn.name });
         return;
+      case 'string': {
+        // A string operand *is* an address: the label of its .rodata bytes.
+        const label = stringLabel.get(operand.value) ?? '.LC0';
+        push(`  lea ${reg}, [${label}]`, 'instruction', { irInstrId, funcName: fn.name });
+        return;
+      }
       case 'label':
         return; // labels are only used by terminators
     }
@@ -129,6 +188,11 @@ function emitFunction(push: Push, module: IRModule, fn: IRFunction): void {
   const loadAddress = (operand: IROperand, reg: string, irInstrId: number): void => {
     if (operand.kind === 'global') {
       push(`  lea ${reg}, [${operand.name}]`, 'instruction', { irInstrId, funcName: fn.name });
+      return;
+    }
+    if (operand.kind === 'string') {
+      const label = stringLabel.get(operand.value) ?? '.LC0';
+      push(`  lea ${reg}, [${label}]`, 'instruction', { irInstrId, funcName: fn.name });
       return;
     }
     if (operand.kind === 'value') {
@@ -229,6 +293,26 @@ function emitFunction(push: Push, module: IRModule, fn: IRFunction): void {
         const source = ops[0];
         if (source === undefined || instr.result === undefined) return;
         loadValue(source, 'eax', id);
+        storeResult(instr.result, 'eax', id);
+        return;
+      }
+      case 'ptradd': {
+        const [base, offset] = ops;
+        if (base === undefined || offset === undefined || instr.result === undefined) return;
+        // The IR counts cells; x86 addresses count bytes, so scale the index.
+        loadAddress(base, 'eax', id);
+        loadValue(offset, 'edx', id);
+        push('  lea eax, [eax + edx*4]', 'instruction', { irInstrId: id, funcName: fn.name });
+        storeResult(instr.result, 'eax', id);
+        return;
+      }
+      case 'ptrdiff': {
+        const [left, right] = ops;
+        if (left === undefined || right === undefined || instr.result === undefined) return;
+        loadAddress(left, 'eax', id);
+        loadAddress(right, 'edx', id);
+        push('  sub eax, edx', 'instruction', { irInstrId: id, funcName: fn.name });
+        push('  sar eax, 2', 'instruction', { irInstrId: id, funcName: fn.name });
         storeResult(instr.result, 'eax', id);
         return;
       }

@@ -1,4 +1,5 @@
 import { wrap32 } from './int32';
+import { cellsOf, isAddress, pointeeOf } from './typeutil';
 import type {
   Ast,
   AstNode,
@@ -8,12 +9,29 @@ import type {
   IRModule,
   IROperand,
   IRType,
+  Type,
 } from './types';
 
 const I32: IRType = 'i32';
 const PTR: IRType = 'ptr';
 const I1: IRType = 'i1';
 const VOID: IRType = 'void';
+
+/** Default value type for nodes semantic analysis left unannotated. */
+const INT_TYPE: Type = { kind: 'int' };
+
+/**
+ * The five calls the language provides itself. They are *declared* in the
+ * module (never defined) so the IR printer can show their signatures; the
+ * interpreter implements them directly.
+ */
+const BUILTINS: Record<string, { ret: IRType; params: IRType[] }> = {
+  malloc: { ret: PTR, params: [I32] },
+  free: { ret: I32, params: [PTR] },
+  delete: { ret: I32, params: [PTR] },
+  print: { ret: I32, params: [I32] },
+  printf: { ret: I32, params: [PTR, I32] },
+};
 
 /** Values produced by expression codegen: an operand plus its IR type. */
 interface GenValue {
@@ -33,19 +51,56 @@ export function generateIR(ast: Ast): IRModule {
   let nextInstrId = 0;
   let nextBlockId = 0;
 
+  /** Built-ins the program calls, so the module can declare them (`@malloc`). */
+  const builtinUses = new Set<string>();
+
   // ---- Global variables ----------------------------------------------------
 
-  /** Top-level `int` variables become `@name` globals (rule 8). */
+  /**
+   * Write an initialiser into a flat cell array, honouring record offsets.
+   *
+   * Only integer literals reach this point: semantic analysis rejects every
+   * other global initialiser, because a global's storage exists before the
+   * program runs.
+   */
+  const fillCells = (cells: number[], base: number, type: Type, initNode: AstNode): void => {
+    if (type.kind === 'array' && initNode.kind === 'InitListExpr') {
+      const stride = cellsOf(type.element);
+      initNode.childIds.forEach((childId, index) => {
+        if (index >= type.size) return;
+        fillCells(cells, base + index * stride, type.element, nodes[childId]);
+      });
+      return;
+    }
+    if (type.kind === 'record' && initNode.kind === 'InitListExpr') {
+      initNode.childIds.forEach((childId, index) => {
+        const field = type.fields[index];
+        if (field !== undefined) fillCells(cells, base + field.offset, field.type, nodes[childId]);
+      });
+      return;
+    }
+    if (initNode.kind === 'IntegerLiteral') cells[base] = wrap32(initNode.value ?? 0);
+  };
+
+  /** Top-level variables become `@name` globals (rule 8). */
   const globalDecls = new Map<number, string>(); // decl node id -> global name
   for (const node of Object.values(nodes)) {
     if (node.kind !== 'VarDecl') continue;
     if (nodes[node.parentId ?? -1]?.kind !== 'TranslationUnit') continue;
-    let init = 0;
-    if (node.childIds.length > 0) {
-      const initNode = nodes[node.childIds[0]];
-      if (initNode.kind === 'IntegerLiteral') init = wrap32(initNode.value ?? 0);
+    const declared = node.type;
+    const cells = declared === undefined ? 1 : cellsOf(declared);
+    const inits = new Array<number>(cells).fill(0);
+    if (node.childIds.length > 0 && declared !== undefined) {
+      fillCells(inits, 0, declared, nodes[node.childIds[0]]);
     }
-    const global: IRGlobal = { name: node.name ?? '', init, astNodeId: node.id };
+    const hasValues = inits.some((value) => value !== 0);
+    const global: IRGlobal = {
+      name: node.name ?? '',
+      init: inits[0] ?? 0,
+      astNodeId: node.id,
+      ...(cells > 1 ? { cells } : {}),
+      ...(cells > 1 && hasValues ? { inits } : {}),
+    };
     irModule.globals.push(global);
     globalDecls.set(node.id, global.name);
   }
@@ -91,6 +146,9 @@ export function generateIR(ast: Ast): IRModule {
       builder!.currentBlockId = createBlock('dead');
     }
     const full: IRInstr = { ...instr, id: nextInstrId++ };
+    if (full.opcode === 'call' && full.callee !== undefined && BUILTINS[full.callee] !== undefined) {
+      builtinUses.add(full.callee);
+    }
     irModule.instrs[full.id] = full;
     irModule.blocks[builder!.currentBlockId].instrIds.push(full.id);
     return full;
@@ -167,9 +225,9 @@ export function generateIR(ast: Ast): IRModule {
     return value(instr.result!);
   };
 
-  /** Rule 4: i1 -> i32 via `zext i1 %c to i32`; i32 passes through. */
+  /** Rule 4: i1 -> i32 via `zext i1 %c to i32`; i32 and pointers pass through. */
   const widenToI32 = (operand: IROperand, type: IRType, astNodeId: number): IROperand => {
-    if (type === I32) return operand;
+    if (type === I32 || type === PTR) return operand;
     const instr = emit({
       opcode: 'zext',
       type: I32,
@@ -180,6 +238,10 @@ export function generateIR(ast: Ast): IRModule {
     });
     return value(instr.result!);
   };
+
+  /** Make an expression's value usable as a stored/call argument value. */
+  const asValue = (val: GenValue, astNodeId: number): IROperand =>
+    widenToI32(val.operand, val.type, astNodeId);
 
   // ---- Expressions ---------------------------------------------------------
 
@@ -192,13 +254,108 @@ export function generateIR(ast: Ast): IRModule {
     return constant(0, PTR);
   };
 
-  /** Lvalue pointer of an assignment target, unwrapping parentheses. */
-  const slotOf = (lhs: AstNode): IROperand => {
-    let target = lhs;
-    while (target.kind === 'ParenExpr' && target.childIds.length === 1) {
-      target = nodes[target.childIds[0]];
+  /**
+   * The address of an lvalue, as a `ptr` value.
+   *
+   * Variables are their own slot (an alloca already holds the address), `*p`
+   * yields the pointer value itself, and `a[i]` / `p.f` are computed with
+   * `ptradd`. Semantic analysis has already rejected anything else.
+   */
+  const addressOf = (node: AstNode): GenValue => {
+    switch (node.kind) {
+      case 'ParenExpr':
+        return node.childIds.length === 1 ? addressOf(nodes[node.childIds[0]]) : nullAddr();
+      case 'DeclRefExpr':
+        return { operand: pointerForDecl(node.refDeclId ?? -1), type: PTR };
+      case 'UnaryOperator': {
+        if (node.op !== 'prefix*') return nullAddr();
+        const inner = genExpr(node.childIds[0]);
+        return { operand: inner.operand, type: PTR };
+      }
+      case 'ArraySubscriptExpr':
+        return genSubscript(node);
+      case 'MemberExpr':
+        return genMember(node);
+      default:
+        return nullAddr();
     }
-    return pointerForDecl(target.refDeclId ?? -1);
+  };
+
+  /** Address returned for an lvalue shape the front end already rejected. */
+  const nullAddr = (): GenValue => ({ operand: constant(0, PTR), type: PTR });
+
+  /** Lvalue pointer of an assignment target, unwrapping parentheses. */
+  const slotOf = (lhs: AstNode): IROperand => addressOf(lhs).operand;
+
+  /**
+   * Index scaled to cells: `i * stride`. Constant indices fold here so that
+   * `a[2]` is a single `ptradd %a, 2` — matching how a real GEP folds.
+   */
+  const scaledIndex = (index: GenValue, stride: number, astNodeId: number): IROperand => {
+    const operand = asValue(index, astNodeId);
+    if (index.operand.kind === 'const') return constant(index.operand.value * stride);
+    if (stride === 1) return operand;
+    const instr = emit({
+      opcode: 'mul',
+      type: I32,
+      result: tempName('idx'),
+      operands: [operand, constant(stride)],
+      astNodeId,
+    });
+    return value(instr.result!);
+  };
+
+  /** `-operand`: folds constants, otherwise `sub i32 0, %x`. */
+  const negate = (operand: IROperand, astNodeId: number): IROperand => {
+    if (operand.kind === 'const') return constant(-operand.value);
+    const instr = emit({
+      opcode: 'sub',
+      type: I32,
+      result: tempName('neg'),
+      operands: [constant(0), operand],
+      astNodeId,
+    });
+    return value(instr.result!);
+  };
+
+  /** `base + cells` as a new pointer value (cells are element counts). */
+  const ptradd = (base: IROperand, cells: number | IROperand, astNodeId: number): GenValue => {
+    const offset = typeof cells === 'number' ? constant(cells) : cells;
+    const instr = emit({
+      opcode: 'ptradd',
+      type: PTR,
+      result: tempName('addr'),
+      operands: [base, offset],
+      astNodeId,
+    });
+    return { operand: value(instr.result!), type: PTR };
+  };
+
+  /** Address of `base[index]` where the element may itself be several cells. */
+  const genSubscript = (node: AstNode): GenValue => {
+    const base = genExpr(node.childIds[0]); // array decays to its own address
+    const index = genExpr(node.childIds[1]);
+    const stride = cellsOf(node.type ?? INT_TYPE);
+    return ptradd(base.operand, scaledIndex(index, stride, node.id), node.id);
+  };
+
+  /** Address of `base.f` / `base->f`, always spelled out as a `ptradd`. */
+  const genMember = (node: AstNode): GenValue => {
+    const baseNode = nodes[node.childIds[0]];
+    const base = genExpr(node.childIds[0]);
+    const baseType = baseNode.type;
+    const record =
+      node.op === '->'
+        ? baseType !== undefined && baseType.kind === 'pointer' && baseType.pointee.kind === 'record'
+          ? baseType.pointee
+          : null
+        : baseType !== undefined && baseType.kind === 'record'
+          ? baseType
+          : null;
+    const offset = record?.fields.find((field) => field.name === node.name)?.offset ?? 0;
+    // Always emit the addressing step — even at offset 0 it documents that
+    // every field access is an address computation.
+    return ptradd(base.operand, constant(offset), node.id);
   };
 
   const ARITH_OPS: Record<string, { opcode: 'add' | 'sub' | 'mul' | 'sdiv' | 'srem'; hint: string }> = {
@@ -246,15 +403,62 @@ export function generateIR(ast: Ast): IRModule {
 
       case 'DeclRefExpr': {
         const ptr = pointerForDecl(node.refDeclId ?? -1);
+        const declared = node.type;
+        // Arrays and records decay: their value *is* their address, so no load.
+        if (declared !== undefined && (declared.kind === 'array' || declared.kind === 'record')) {
+          return { operand: ptr, type: PTR };
+        }
+        const irType: IRType = declared?.kind === 'pointer' ? PTR : I32;
         const instr = emit({
           opcode: 'load',
-          type: I32,
+          type: irType,
           result: tempName(),
           operands: [ptr],
           astNodeId: node.id,
         });
-        return { operand: value(instr.result!), type: I32 };
+        return { operand: value(instr.result!), type: irType };
       }
+
+      case 'ArraySubscriptExpr': {
+        const addr = genSubscript(node);
+        const elementType = node.type ?? INT_TYPE;
+        if (elementType.kind === 'array' || elementType.kind === 'record') return addr;
+        const irType: IRType = elementType.kind === 'pointer' ? PTR : I32;
+        const instr = emit({
+          opcode: 'load',
+          type: irType,
+          result: tempName(),
+          operands: [addr.operand],
+          astNodeId: node.id,
+        });
+        return { operand: value(instr.result!), type: irType };
+      }
+
+      case 'MemberExpr': {
+        const addr = genMember(node);
+        const fieldType = node.type ?? INT_TYPE;
+        if (fieldType.kind === 'array' || fieldType.kind === 'record') return addr;
+        const irType: IRType = fieldType.kind === 'pointer' ? PTR : I32;
+        const instr = emit({
+          opcode: 'load',
+          type: irType,
+          result: tempName(),
+          operands: [addr.operand],
+          astNodeId: node.id,
+        });
+        return { operand: value(instr.result!), type: irType };
+      }
+
+      case 'SizeOfExpr':
+        // Semantic analysis folds `sizeof` into a compile-time cell count.
+        return { operand: constant(node.value ?? 0), type: I32 };
+
+      case 'NewExpr':
+        return genNew(node);
+
+      case 'StringLiteral':
+        // Only reachable as printf's first argument, handled there.
+        return { operand: { kind: 'string', value: node.stringValue ?? '' }, type: PTR };
 
       case 'BinaryOperator': {
         const op = node.op ?? '+';
@@ -268,6 +472,31 @@ export function generateIR(ast: Ast): IRModule {
         const op = (node.op ?? '+=').slice(0, -1); // '+=' -> '+'
         const lhs = nodes[node.childIds[0]];
         const slot = slotOf(lhs);
+        if (lhs.type?.kind === 'pointer') {
+          // `p += n` / `p -= n` move an address by whole elements.
+          const loaded = emit({
+            opcode: 'load',
+            type: PTR,
+            result: tempName(),
+            operands: [slot],
+            astNodeId: lhs.id,
+          });
+          const rhs = genExpr(node.childIds[1]);
+          const stride = cellsOf(pointeeOf(lhs.type) ?? INT_TYPE);
+          const delta = scaledIndex(rhs, stride, node.childIds[1]);
+          const result = ptradd(
+            value(loaded.result!),
+            op === '-' ? negate(delta, node.id) : delta,
+            node.id,
+          );
+          emit({
+            opcode: 'store',
+            type: PTR,
+            operands: [result.operand, slot],
+            astNodeId: node.id,
+          });
+          return result;
+        }
         const loaded = emit({
           opcode: 'load',
           type: I32,
@@ -292,7 +521,8 @@ export function generateIR(ast: Ast): IRModule {
           const arg = genExpr(argId);
           args.push(widenToI32(arg.operand, arg.type, argId));
         }
-        const retType: IRType = node.type?.kind === 'void' ? VOID : I32;
+        const retKind = node.type?.kind;
+        const retType: IRType = retKind === 'void' ? VOID : retKind === 'pointer' ? PTR : I32;
         const instr = emit({
           opcode: 'call',
           type: retType,
@@ -302,7 +532,7 @@ export function generateIR(ast: Ast): IRModule {
           astNodeId: node.id,
         });
         if (retType === VOID) return { operand: constant(0), type: VOID };
-        return { operand: value(instr.result!), type: I32 };
+        return { operand: value(instr.result!), type: retType };
       }
 
       default:
@@ -310,11 +540,67 @@ export function generateIR(ast: Ast): IRModule {
     }
   };
 
+  /**
+   * `new T` / `new T[n]` → `call ptr @malloc(cells)`, with `n` scaled to the
+   * element's cell count so the heap block is exactly as large as the object.
+   */
+  const genNew = (node: AstNode): GenValue => {
+    const declared = node.type;
+    const allocated = declared === undefined ? INT_TYPE : pointeeOf(declared) ?? INT_TYPE;
+    const stride = cellsOf(allocated);
+    let bytes: IROperand;
+    if (node.op === 'new[]' && node.childIds.length > 0) {
+      const count = genExpr(node.childIds[0]);
+      bytes = scaledIndex(count, stride, node.childIds[0]);
+    } else {
+      bytes = constant(stride);
+    }
+    const instr = emit({
+      opcode: 'call',
+      type: PTR,
+      result: tempName('call'),
+      callee: 'malloc',
+      operands: [bytes],
+      astNodeId: node.id,
+    });
+    return { operand: value(instr.result!), type: PTR };
+  };
+
   const genBinary = (node: AstNode, op: string): GenValue => {
-    const left = genExpr(node.childIds[0]);
-    const right = genExpr(node.childIds[1]);
-    const leftOperand = widenToI32(left.operand, left.type, node.childIds[0]);
-    const rightOperand = widenToI32(right.operand, right.type, node.childIds[1]);
+    const leftId = node.childIds[0];
+    const rightId = node.childIds[1];
+    const leftType = nodes[leftId]?.type;
+    const rightType = nodes[rightId]?.type;
+    const left = genExpr(leftId);
+    const right = genExpr(rightId);
+
+    // Pointer arithmetic moves by whole elements, not by single cells:
+    // `p + i` / `i + p` / `p - i` add cells, `p - q` measures cells between
+    // two addresses. Semantic analysis has already checked the operand types.
+    if (op === '+' || op === '-') {
+      if (leftType !== undefined && isAddress(leftType)) {
+        if (op === '-' && rightType !== undefined && isAddress(rightType)) {
+          const instr = emit({
+            opcode: 'ptrdiff',
+            type: I32,
+            result: tempName('pdiff'),
+            operands: [left.operand, right.operand],
+            astNodeId: node.id,
+          });
+          return { operand: value(instr.result!), type: I32 };
+        }
+        const stride = cellsOf(pointeeOf(leftType) ?? INT_TYPE);
+        const delta = scaledIndex(right, stride, rightId);
+        return ptradd(left.operand, op === '-' ? negate(delta, node.id) : delta, node.id);
+      }
+      if (op === '+' && rightType !== undefined && isAddress(rightType)) {
+        const stride = cellsOf(pointeeOf(rightType) ?? INT_TYPE);
+        return ptradd(right.operand, scaledIndex(left, stride, leftId), node.id);
+      }
+    }
+
+    const leftOperand = asValue(left, leftId);
+    const rightOperand = asValue(right, rightId);
 
     const predicate = COMPARISONS[op];
     if (predicate !== undefined) {
@@ -333,10 +619,15 @@ export function generateIR(ast: Ast): IRModule {
 
   const genAssign = (node: AstNode): GenValue => {
     const rhs = genExpr(node.childIds[1]);
-    const operand = widenToI32(rhs.operand, rhs.type, node.childIds[1]);
-    const slot = slotOf(nodes[node.childIds[0]]);
-    emit({ opcode: 'store', type: I32, operands: [operand, slot], astNodeId: node.id });
-    return { operand, type: I32 };
+    const operand = asValue(rhs, node.childIds[1]);
+    const addr = addressOf(nodes[node.childIds[0]]);
+    emit({
+      opcode: 'store',
+      type: rhs.type === VOID ? I32 : rhs.type,
+      operands: [operand, addr.operand],
+      astNodeId: node.id,
+    });
+    return { operand, type: rhs.type };
   };
 
   /** Rule 5: `&&` / `||` without phi, via a hidden i32 temp and two blocks. */
@@ -426,7 +717,35 @@ export function generateIR(ast: Ast): IRModule {
       return { operand: resultOperand, type: I32 };
     }
 
+    if (op === 'prefix&') {
+      // Taking an address emits nothing: an alloca already *is* one.
+      return addressOf(nodes[operandId]);
+    }
+
+    if (op === 'prefix+') {
+      // `+x` is the identity for the int operand semantic analysis checked.
+      return genExpr(operandId);
+    }
+
     const operand = genExpr(operandId);
+
+    if (op === 'prefix*') {
+      const pointee = node.type;
+      if (pointee !== undefined && (pointee.kind === 'array' || pointee.kind === 'record')) {
+        // Derefencing to an aggregate yields its address, not a copy.
+        return { operand: operand.operand, type: PTR };
+      }
+      const irType: IRType = pointee?.kind === 'pointer' ? PTR : I32;
+      const loaded = emit({
+        opcode: 'load',
+        type: irType,
+        result: tempName(),
+        operands: [operand.operand],
+        astNodeId: node.id,
+      });
+      return { operand: value(loaded.result!), type: irType };
+    }
+
     const operandOperand = widenToI32(operand.operand, operand.type, operandId);
 
     if (op === 'prefix-') {
@@ -455,6 +774,78 @@ export function generateIR(ast: Ast): IRModule {
 
   // ---- Statements ----------------------------------------------------------
 
+  /**
+   * Fill a `{ ... }` initialiser into `base + offset`, one `store` per literal.
+   *
+   * Struct fields keep their declared offsets, union fields all land at 0, and
+   * a short list leaves the remaining cells zero — exactly what semantic
+   * analysis already validated.
+   */
+  const genInitList = (base: IROperand, type: Type, offset: number, list: AstNode): void => {
+    if (type.kind === 'array') {
+      const stride = cellsOf(type.element);
+      list.childIds.forEach((childId, index) => {
+        if (index >= type.size) return;
+        writeInitializer(base, offset + index * stride, type.element, childId);
+      });
+      return;
+    }
+    if (type.kind === 'record') {
+      list.childIds.forEach((childId, index) => {
+        const field = type.fields[index];
+        if (field !== undefined) writeInitializer(base, offset + field.offset, field.type, childId);
+      });
+    }
+  };
+
+  /** A single initialiser element: a nested list recurses, a literal stores. */
+  const writeInitializer = (
+    base: IROperand,
+    offset: number,
+    type: Type,
+    childId: number,
+  ): void => {
+    const child = nodes[childId];
+    if (child.kind === 'InitListExpr') {
+      genInitList(base, type, offset, child);
+      return;
+    }
+    if (type.kind === 'array' || type.kind === 'record') return; // sema reported it
+    const init = genExpr(childId);
+    const operand = asValue(init, childId);
+    const addr = offset === 0 ? base : ptradd(base, offset, childId).operand;
+    emit({
+      opcode: 'store',
+      type: init.type === VOID ? I32 : init.type,
+      operands: [operand, addr],
+      astNodeId: childId,
+    });
+  };
+
+  /** `print(x)` / `printf("fmt", ...)` lower to a call of the same name. */
+  const genPrint = (node: AstNode): void => {
+    const isPrintf = node.op === 'printf';
+    const args: IROperand[] = [];
+    let index = 0;
+    if (isPrintf && node.childIds.length > 0) {
+      const format = nodes[node.childIds[0]];
+      args.push({ kind: 'string', value: format.stringValue ?? '' });
+      index = 1;
+    }
+    for (const argId of node.childIds.slice(index)) {
+      args.push(asValue(genExpr(argId), argId));
+    }
+    emit({
+      opcode: 'call',
+      type: I32,
+      result: tempName('call'),
+      callee: isPrintf ? 'printf' : 'print',
+      operands: args,
+      astNodeId: node.id,
+    });
+  };
+
+
   const genStmt = (nodeId: number): void => {
     const node = nodes[nodeId];
     switch (node.kind) {
@@ -463,14 +854,21 @@ export function generateIR(ast: Ast): IRModule {
         return;
 
       case 'VarDecl': {
-        declareSlot(node, node.name ?? '');
+        const slot = declareSlot(node, node.name ?? '');
         if (node.childIds.length > 0) {
+          const declared = node.type;
+          const initNode = nodes[node.childIds[0]];
+          if (declared !== undefined && (declared.kind === 'array' || declared.kind === 'record')) {
+            // Aggregate initialisers become one `store` per literal cell.
+            if (initNode.kind === 'InitListExpr') genInitList(slot, declared, 0, initNode);
+            return;
+          }
           const init = genExpr(node.childIds[0]);
-          const operand = widenToI32(init.operand, init.type, node.childIds[0]);
+          const operand = asValue(init, node.childIds[0]);
           emit({
             opcode: 'store',
-            type: I32,
-            operands: [operand, builder!.slots.get(node.id)!],
+            type: init.type === VOID ? I32 : init.type,
+            operands: [operand, slot],
             astNodeId: node.id,
           });
         }
@@ -484,14 +882,31 @@ export function generateIR(ast: Ast): IRModule {
       case 'NullStmt':
         return;
 
+      case 'PrintStmt':
+        genPrint(node);
+        return;
+
+      case 'DeleteStmt': {
+        const target = genExpr(node.childIds[0]);
+        emit({
+          opcode: 'call',
+          type: I32,
+          result: tempName('call'),
+          callee: 'delete',
+          operands: [target.operand],
+          astNodeId: node.id,
+        });
+        return;
+      }
+
       case 'ReturnStmt': {
         if (node.childIds.length === 0) {
           emitRet(null, VOID, node.id);
           return;
         }
         const returned = genExpr(node.childIds[0]);
-        const operand = widenToI32(returned.operand, returned.type, node.childIds[0]);
-        emitRet(operand, I32, node.id);
+        const operand = asValue(returned, node.childIds[0]);
+        emitRet(operand, returned.type === VOID ? I32 : returned.type, node.id);
         return;
       }
 
@@ -603,12 +1018,32 @@ export function generateIR(ast: Ast): IRModule {
     builder!.currentBlockId = endBlockId;
   };
 
-  const declareSlot = (node: AstNode, name: string): void => {
+  /**
+   * Reserve storage for a local or a parameter and remember where it lives.
+   *
+   * `int x` is `alloca i32` and `int *p` is `alloca ptr`; arrays and records
+   * additionally carry `cells` (what the simulator reserves) and a `shape`
+   * such as `[5 x i32]` (what the printer shows).
+   */
+  const declareSlot = (node: AstNode, name: string): IROperand => {
     const isParam = node.kind === 'ParamDecl';
+    const declared = node.type;
+    const aggregate =
+      declared !== undefined && (declared.kind === 'array' || declared.kind === 'record');
+    const cells = declared === undefined ? 1 : cellsOf(declared);
+    const irType: IRType = declared?.kind === 'pointer' ? PTR : I32;
     // Rule 2: param `x` -> `%x.addr`; local `x` -> `%x` (suffix when shadowed).
     const result = tempName(isParam ? `${name}.addr` : name);
-    const alloca = emitAlloca({ type: I32, result, operands: [], varName: name, astNodeId: node.id });
+    const alloca = emitAlloca({
+      type: irType,
+      result,
+      operands: [],
+      varName: name,
+      astNodeId: node.id,
+      ...(aggregate ? { cells, shape: `[${cells} x i32]` } : {}),
+    });
     builder!.slots.set(node.id, value(alloca.result!));
+    return value(alloca.result!);
   };
 
   // ---- Functions -----------------------------------------------------------
@@ -618,12 +1053,24 @@ export function generateIR(ast: Ast): IRModule {
     const paramNodes = node.childIds
       .filter((id) => nodes[id].kind === 'ParamDecl')
       .map((id) => nodes[id]);
-    const retType: IRType = node.declRet === 'void' ? VOID : I32;
+    const declaredRet =
+      node.type?.kind === 'function'
+        ? node.type.ret
+        : node.declRet === 'void'
+          ? ({ kind: 'void' } as const)
+          : INT_TYPE;
+    const retType: IRType =
+      declaredRet.kind === 'void'
+        ? VOID
+        : declaredRet.kind === 'pointer'
+          ? PTR
+          : I32;
+    const irParamType = (param: AstNode): IRType => (param.type?.kind === 'pointer' ? PTR : I32);
 
     const fn: IRFunction = {
       name: node.name ?? '',
       ret: retType,
-      params: paramNodes.map((param) => ({ name: `%${param.name}`, type: I32 })),
+      params: paramNodes.map((param) => ({ name: `%${param.name}`, type: irParamType(param) })),
       blockIds: [],
       isDeclaration: bodyId === undefined,
       astNodeId: node.id,
@@ -650,7 +1097,7 @@ export function generateIR(ast: Ast): IRModule {
       declareSlot(param, param.name ?? '');
       emit({
         opcode: 'store',
-        type: I32,
+        type: irParamType(param),
         operands: [value(`%${param.name}`), builder.slots.get(param.id)!],
         astNodeId: param.id,
       });
@@ -699,6 +1146,19 @@ export function generateIR(ast: Ast): IRModule {
   for (const childId of nodes[ast.rootId].childIds) {
     const node = nodes[childId];
     if (node.kind === 'FunctionDecl') genFunction(node);
+  }
+
+  // Built-ins are declared, never defined: `declare i32 @print(i32 %arg0)`.
+  for (const name of builtinUses) {
+    const spec = BUILTINS[name];
+    if (spec === undefined) continue;
+    irModule.functions.push({
+      name,
+      ret: spec.ret,
+      params: spec.params.map((type, index) => ({ name: `%arg${index}`, type })),
+      blockIds: [],
+      isDeclaration: true,
+    });
   }
 
   return irModule;

@@ -51,6 +51,11 @@ function operandText(operand: IROperand, module: { blocks: Record<number, { labe
       return `label %${module.blocks[operand.blockId]?.label ?? `block${operand.blockId}`}`;
     case 'global':
       return `ptr @${operand.name}`;
+    case 'string':
+      return `ptr "${operand.value
+        .replace(/\\/g, '\\\\')
+        .replace(/"/g, '\\"')
+        .replace(/\n/g, '\\n')}"`;
   }
 }
 

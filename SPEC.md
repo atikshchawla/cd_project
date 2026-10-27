@@ -51,22 +51,28 @@ Do not add anything else (no React Bits, framer-motion, parser libraries, diff l
 
 | Area | Supported |
 |---|---|
-| Types | `int` (32-bit), `void` |
-| Declarations | local and global `int` variables with optional initialiser; functions with ≤ 4 parameters |
-| Expressions | integer literals; identifiers; `+ - * / %`; `< > <= >= == !=`; `&& \|\| !`; unary `-`; `= += -= *= /= %=`; `++ --` (prefix and postfix); function calls; parentheses |
-| Statements | block, expression statement, `if/else`, `while`, `for` (init may be a declaration), `return`, `break`, `continue`, empty `;` |
+| Types | `int` (32-bit), `void` (return position only), pointers (`int *`, `int **`), arrays (`int a[3]`, `int m[2][3]`), `struct` / `union` records with named fields. A field may be a pointer, an array or another record, so nesting works to any depth (`t.m.l.v`), and `struct P a[3]` is an array of records |
+| Declarations | local and global variables with an optional initialiser or `{ … }` list; record declarations; functions with ≤ 4 parameters (array parameters decay to pointers) |
+| Expressions | integer literals; string literals (only as a `printf` format); identifiers; `+ - * / %`; `< > <= >= == !=`; `&& \|\| !`; unary `- + & *`; `= += -= *= /= %=`; `++ --` (prefix and postfix); indexing `a[i]`; member access `.` / `->`; pointer arithmetic and pointer comparison; `new T` / `new T[n]`; `sizeof(type)` (cell count); function calls; `print(...)` / `printf(...)`; parentheses |
+| Statements | block, expression statement, `if/else`, `while`, `for` (init may be a declaration), `return`, `break`, `continue`, empty `;`, `delete ptr;`, `print` / `printf` calls |
+| Dynamic memory | `malloc(n)` / `free(p)` and `new` / `delete` over cell-addressed memory; every block carries its own guard cell so a one-past-the-end pointer is never confused with the next variable |
 | Preprocessor | `#include <...>` lines are lexed as one `directive` token and ignored |
 
-Everything else (C++, `char`, strings, `printf`, arrays, pointers, structs, floats, `do-while`, `switch`, ternary, bitwise/shift operators, other directives, etc.) must produce a clear **unsupported** diagnostic (code `E1010`) explaining what *is* supported. Never crash.
+Everything else (`char` and text as values, floats, `do-while`, `switch`, `goto`, ternary, comma operator, bitwise/shift operators, casts, `const`/`static`/`extern`/`unsigned`, `typedef` / `enum`, variable-length or empty array sizes (`int a[n]`, `int a[]`, `int f(int a[][3])`), hexadecimal literals, function pointers, varargs, passing or returning a record by value, whole-record assignment, non-literal global initialisers, directives other than `#include`, etc.) must produce a clear diagnostic explaining what *is* supported — `E1010` when the construct is recognised but unsupported, a syntax error when the grammar has no production for it. Never crash, and never silently mis-compile (the one tolerated divergence: a leading zero is not octal, so `010` reads as decimal ten).
 
 Grammar (precedence climbing, hand-written recursive descent):
 ```
 translation_unit = { directive | external_decl } ;
-external_decl    = ("int"|"void") ident ( "(" [params] ")" ( compound | ";" ) | [ "=" assign ] ";" ) ;
-params           = "void" | "int" ident { "," "int" ident } ;
-compound         = "{" { declaration | statement } "}" ;
-declaration      = "int" ident [ "=" assign ] ";" ;
-statement        = compound | if | while | for | "return" [expr] ";" | "break" ";" | "continue" ";" | [expr] ";" ;
+external_decl    = type_spec declarator ( "(" [params] ")" ( compound | ";" ) | [ "=" initializer ] ";" ) ;
+type_spec        = ("int"|"void") | ("struct"|"union") ident ;
+declarator       = "*"* ident { "[" integer "]" } ;
+params           = "void" | type_spec declarator { "," type_spec declarator } ;
+record_decl      = ("struct"|"union") ident "{" { type_spec declarator ";" } "}" ";" ;
+compound         = "{" { declaration | record_decl | statement } "}" ;
+declaration      = type_spec declarator [ "=" initializer ] ";" ;
+initializer      = assign | "{" [ initializer { "," initializer } [ "," ] ] "}" ;
+statement        = compound | if | while | for | "return" [expr] ";" | "break" ";" | "continue" ";" 
+                 | "delete" expr ";" | ("print"|"printf") "(" [expr { "," expr }] ")" ";" | [expr] ";" ;
 if               = "if" "(" expr ")" statement [ "else" statement ] ;
 while            = "while" "(" expr ")" statement ;
 for              = "for" "(" ( declaration | [expr] ";" ) [expr] ";" [expr] ")" statement ;
@@ -78,9 +84,12 @@ equality         = relational { ("=="|"!=") relational } ;
 relational       = additive { ("<"|">"|"<="|">=") additive } ;
 additive         = multiplicative { ("+"|"-") multiplicative } ;
 multiplicative   = unary { ("*"|"/"|"%") unary } ;
-unary            = ("-"|"!"|"++"|"--") unary | postfix ;
-postfix          = primary { "(" [args] ")" | "++" | "--" } ;
-primary          = ident | int_lit | "(" expr ")" ;
+unary            = ("-"|"+"|"!"|"&"|"*"|"++"|"--") unary
+                 | "sizeof" "(" type_spec "*"* ")"
+                 | "new" type_spec [ "[" expr "]" ]
+                 | postfix ;
+postfix          = primary { "(" [args] ")" | "[" expr "]" | "." ident | "->" ident | "++" | "--" } ;
+primary          = ident | int_lit | string_lit | "(" expr ")" ;
 ```
 
 ## 5. Architecture
@@ -92,12 +101,14 @@ components/
   ui/           shadcn components
   shell/        AppShell, StageNavigator, SettingsStrip, AboutDialog, ProvenanceBadge
   editor/       CodeEditor, ExamplePicker, ProblemsBar
-  stages/       TokenExplorer, AstExplorer, SemanticView, IrView
-  common/       ExplanationPanel, DiagnosticList, CodeRows, GraphCanvas
+  stages/       TokenExplorer, AstExplorer, SemanticView, IrView, OptView, AssemblyView, ExecView
+  common/       ExplanationPanel, DiagnosticList, CodeRows, GraphCanvas, optExplanations helpers
 lib/
-  compiler/     types.ts, int32.ts, lexer.ts, parser.ts, sema.ts, irgen.ts, irprint.ts, index.ts
+  compiler/     types.ts, int32.ts, typeutil.ts, lexer.ts, parser.ts, sema.ts,
+                irgen.ts, irprint.ts, optimize/ (index, forwarding, folding, cse, dce,
+                support, verify, types), asmgen.ts, simulate.ts, index.ts
   highlight.ts  status.ts  store.ts
-content/        explanations.ts, examples.ts
+content/        explanations.ts, examples.ts, optExplanations.ts
 tests/
 ```
 Components import the engine only through `lib/compiler/index.ts` and `types.ts`.
@@ -122,26 +133,44 @@ export interface Diagnostic {
   notes?: { message: string; range?: Range }[];
 }
 
-export type TokenKind = 'keyword' | 'identifier' | 'integer-literal' | 'operator' | 'punctuator' | 'directive';
+export type TokenKind = 'keyword' | 'identifier' | 'integer-literal' | 'string-literal'
+  | 'operator' | 'punctuator' | 'directive';
 export interface Token {
   id: number; kind: TokenKind; text: string; range: Range;
   line: number; col: number; endLine: number; endCol: number;   // 1-based; a tab counts as 1 column
 }
 
-export type Type =
-  | { kind: 'int' } | { kind: 'void' }
-  | { kind: 'function'; ret: Type; params: Type[] };            // later: char, pointer, array
+/** Exactly as written in the source; sema resolves it to a `Type`. */
+export interface TypeRef {
+  base: 'int' | 'void' | 'struct' | 'union'; tag?: string;   // tag for struct/union
+  stars: number;                                             // `*`s before the name
+  dims: number[];                                            // array sizes, outermost first
+}
+export interface RecordField { name: string; type: Type; offset: number; size: number; range: Range }
 
-export type AstKind = 'TranslationUnit' | 'FunctionDecl' | 'ParamDecl' | 'VarDecl' | 'CompoundStmt'
-  | 'DeclStmt' | 'ExprStmt' | 'IfStmt' | 'WhileStmt' | 'ForStmt' | 'ReturnStmt'
-  | 'BreakStmt' | 'ContinueStmt' | 'NullStmt' | 'BinaryOperator' | 'UnaryOperator'
-  | 'CompoundAssignOperator' | 'CallExpr' | 'DeclRefExpr' | 'IntegerLiteral' | 'ParenExpr';
+export type Type =
+  | { kind: 'int' } | { kind: 'void' } | { kind: 'string' }
+  | { kind: 'pointer'; pointee: Type }
+  | { kind: 'array'; element: Type; size: number }
+  | { kind: 'record'; recordKind: 'struct' | 'union'; name: string;
+      fields: RecordField[]; size: number }                  // size in cells
+  | { kind: 'function'; ret: Type; params: Type[] };
+
+export type AstKind = 'TranslationUnit' | 'FunctionDecl' | 'ParamDecl' | 'VarDecl'
+  | 'RecordDecl' | 'FieldDecl' | 'CompoundStmt' | 'DeclStmt' | 'ExprStmt' | 'IfStmt'
+  | 'WhileStmt' | 'ForStmt' | 'ReturnStmt' | 'BreakStmt' | 'ContinueStmt' | 'NullStmt'
+  | 'PrintStmt' | 'DeleteStmt' | 'BinaryOperator' | 'UnaryOperator'
+  | 'CompoundAssignOperator' | 'CallExpr' | 'DeclRefExpr' | 'IntegerLiteral'
+  | 'StringLiteral' | 'ArraySubscriptExpr' | 'MemberExpr' | 'InitListExpr'
+  | 'SizeOfExpr' | 'NewExpr' | 'ParenExpr';
 
 export interface AstNode {
   id: number; kind: AstKind; range: Range;
   parentId: number | null; childIds: number[];
-  name?: string; op?: string;               // op: '+', '=', 'prefix++', 'postfix--', ...
-  value?: number; type?: Type;              // type filled by sema
+  name?: string; op?: string;               // op: '+', '=', 'prefix++', '.', '->', 'new[]', ...
+  value?: number; type?: Type;              // type filled by sema; value: literals + sizeof
+  typeRef?: TypeRef;                        // written type of a declaration / sizeof / new
+  stringValue?: string;                     // decoded contents of a string literal
   refDeclId?: number;                       // DeclRefExpr -> declaring node id (sema)
 }
 export interface Ast { rootId: number; nodes: Record<number, AstNode> }
@@ -153,10 +182,11 @@ export interface Scope { id: number; parentId: number | null; kind: 'global' | '
 
 export type IRType = 'i1' | 'i32' | 'ptr' | 'void';
 export type IROpcode = 'alloca' | 'load' | 'store' | 'add' | 'sub' | 'mul' | 'sdiv' | 'srem'
-  | 'icmp' | 'zext' | 'br' | 'ret' | 'call' | 'unreachable';
+  | 'icmp' | 'zext' | 'ptradd' | 'ptrdiff' | 'br' | 'ret' | 'call' | 'unreachable';
 export type IROperand =
   | { kind: 'value'; name: string } | { kind: 'const'; value: number; type: IRType }
-  | { kind: 'label'; blockId: number } | { kind: 'global'; name: string };
+  | { kind: 'label'; blockId: number } | { kind: 'global'; name: string }
+  | { kind: 'string'; value: string };      // a string literal's address (printf format)
 export interface IRInstr {
   id: number;                       // unique per module, never reused
   opcode: IROpcode; type: IRType;
@@ -165,11 +195,18 @@ export interface IRInstr {
   predicate?: 'eq' | 'ne' | 'slt' | 'sle' | 'sgt' | 'sge';
   astNodeId?: number;               // origin AST node; omit when there is no honest origin
   varName?: string;                 // on alloca: the source variable it holds
+  callee?: string;                  // on call: the function name (without '@')
+  toType?: IRType;                  // on zext: the target type
+  cells?: number;                   // on alloca: cells reserved (1 for a scalar)
+  shape?: string;                   // on alloca: e.g. `[5 x i32]`
 }
 export interface IRBlock { id: number; label: string; instrIds: number[] }
 export interface IRFunction { name: string; ret: IRType; params: { name: string; type: IRType }[];
   blockIds: number[]; isDeclaration: boolean; astNodeId?: number }
-export interface IRModule { functions: IRFunction[]; blocks: Record<number, IRBlock>; instrs: Record<number, IRInstr> }
+export interface IRGlobal { name: string; init: number; cells?: number;  // N > 1 for arrays/records
+  inits?: number[]; astNodeId?: number }
+export interface IRModule { globals: IRGlobal[]; functions: IRFunction[];
+  blocks: Record<number, IRBlock>; instrs: Record<number, IRInstr> }
 export interface IRLine { lineNo: number; text: string; instrId?: number; blockId?: number; funcName?: string }
 
 export type AsmLineKind = 'directive' | 'label' | 'instruction' | 'comment';
@@ -195,16 +232,20 @@ export interface CompileResult {
 
 ### 6.1 Lexer
 - Normalise `\r\n` / `\r` to `\n` first. Skip whitespace and `//`, `/* */` comments (not tokens).
-- Keywords: `int void if else while for return break continue`. Reserved-but-unsupported words (`char struct float double long unsigned switch case default goto typedef enum union static const sizeof do class new delete namespace template`) lex as keywords and yield `E1010` in the parser.
-- Operators (longest match): `++ -- += -= *= /= %= == != <= >= && || + - * / % < > = !`. Punctuators: `( ) { } ; ,`.
-- Any other character such as `& | ^ ~ ? : . [ ] "` or `'` → `E1010` (unsupported) with an explanation; truly invalid characters → `E1001`. Unterminated block comment → `E1002`. Integer literal > 2147483647 → `E1004`.
+- Keywords: `int void if else while for return break continue struct union sizeof new delete print printf`. Reserved-but-unsupported words (`char float double long unsigned switch case default goto typedef enum static const do class namespace template`) lex as keywords and yield `E1010` in the parser.
+- Operators (longest match): `++ -- += -= *= /= %= == != <= >= && || -> + - * / % < > = ! &`. Punctuators: `( ) { } ; , [ ] .`.
+- String literals `"…"` are their own token kind (`string-literal`); escapes are decoded at lex time. An unterminated one is `E1003` and the token is still emitted so the rest of the line stays visible.
+- Any other character such as `| ^ ~ ? : @` → `E1010` (unsupported) with an explanation; characters with no meaning at all (control characters, non-ASCII, a `#` that is not at the start of a line) → `E1001`. Unterminated block comment → `E1002`. Integer literal > 2147483647 → `E1004`.
 - Never throws; returns tokens (possibly partial) plus diagnostics.
 
 ### 6.2 Parser
 - Output `Ast` as a flat `nodes` map; IDs in creation order; maintain `parentId`/`childIds`; each node's `range` covers exactly its source text.
 - **Stop at the first syntax error**: one diagnostic (`E2001` expected X, `E2002` unexpected token/EOF) with a range at the offending token (or the end of the previous token for "expected `;`"), and return `ast: null`. No recovery.
 - Keep `ParenExpr` nodes. No implicit-cast nodes (types are shown as annotations).
-- `=` is a `BinaryOperator` with `op:'='`; `+= -= *= /= %=` are `CompoundAssignOperator`; `++/--` are `UnaryOperator` with `op` `'prefix++' | 'postfix++' | 'prefix--' | 'postfix--'`.
+- `=` is a `BinaryOperator` with `op:'='`; `+= -= *= /= %=` are `CompoundAssignOperator`; `++/--` are `UnaryOperator` with `op` `'prefix++' | 'postfix++' | 'prefix--' | 'postfix--'`; `&` and `*` are `UnaryOperator` with `op` `'prefix&' | 'prefix*'`.
+- Declarations go through a **declarator**: the written type is recorded on the node as `typeRef` (`base`, `tag`, `stars`, `dims`, outermost first) so sema — not the parser — decides what it means. Array sizes must be integer literals ≤ 100000, otherwise `E1010`.
+- Records: `struct`/`union` tags followed by `{ … }` become `RecordDecl` with `FieldDecl` children. `new T` / `new T[expr]` become `NewExpr` with `op 'new' | 'new[]'`; `delete expr;` a `DeleteStmt`; `print` / `printf` a `PrintStmt` with `op 'print' | 'printf'`.
+- Member access `.` / `->` and subscripts `[ ]` are postfix operators (`MemberExpr`, `ArraySubscriptExpr`). A reserved keyword used as a name is `E1010` with the keyword's own range.
 
 ### 6.3 Semantic analysis
 Scope-stack walk. Produce `symbols`, `scopes`, `type` on every expression/declaration, `refDeclId` on every `DeclRefExpr`, `useNodeIds`, and diagnostics. **Collect multiple semantic errors** (don't stop at the first). Messages are our own wording in a Clang-like style.
@@ -212,21 +253,23 @@ Scope-stack walk. Produce `symbols`, `scopes`, `type` on every expression/declar
 | Code | Severity | Meaning |
 |---|---|---|
 | E1001 E1002 E1004 | error | lexical: invalid char / unterminated comment / literal too large |
-| E1010 | error | unsupported construct (stage `unsupported`) |
+| E1003 | error | lexical: unterminated string literal (the token is still emitted) |
+| E1010 | error | unsupported construct — stage `unsupported` from the lexer/parser, stage `sema` when semantic analysis meets a type this dialect cannot lower |
 | E2001 E2002 | error | syntax: expected token / unexpected token |
 | E3001 | error | use of undeclared identifier (calling an undeclared function included) |
 | E3002 | error | redeclaration in the same scope |
-| E3003 | error | incompatible types (e.g. assigning `void`, using a `void` call as a value) |
+| E3003 | error | incompatible types (assigning `void`, a whole record/array, using a `void` call as a value) |
 | E3004 | error | wrong number of arguments in a call |
+| E3005 | error | no member with that name in the record |
 | E3006 | error | `break`/`continue` outside a loop |
 | E3009 | error | `return` value mismatch with function type |
 | W4001 | warning | unused local variable |
 | W4002 | warning | non-void function may end without `return` (not for `main`) |
 
-Also treat assignment to a non-lvalue as `E3003`. Do not display any semantic fact that wasn't computed.
+Also treat assignment to a non-lvalue as `E3003`. A rejected signature must not cascade: when a record parameter or return type is reported as unsupported, the declared type is kept so the body still analyses against what was written. Do not display any semantic fact that wasn't computed.
 
 ### 6.4 IR generation — LLVM-style, `-O0`-like
-Generate from the **annotated AST**. Style: unoptimised Clang-like output (locals in `alloca`, accessed by `load`/`store`), opaque `ptr`. Types: `i1`, `i32`, `ptr`, `void`. Opcodes: `alloca load store add sub mul sdiv srem icmp zext br ret call unreachable`. **No `phi`.**
+Generate from the **annotated AST**. Style: unoptimised Clang-like output (locals in `alloca`, accessed by `load`/`store`), opaque `ptr`. Types: `i1`, `i32`, `ptr`, `void`. Opcodes: `alloca load store add sub mul sdiv srem icmp zext ptradd ptrdiff br ret call unreachable`. **No `phi`.**
 
 ```llvm
 define i32 @add(i32 %a, i32 %b) {
@@ -250,10 +293,13 @@ Rules (they prevent invalid IR):
 5. `&&` / `||` without `phi`: use a hidden `i32` temp alloca (`%land.tmp` / `%lor.tmp`), blocks `land.rhs`/`land.end` (`lor.rhs`/`lor.end`), store 0/1 on the paths and `load` it in the end block. The explanation text notes real Clang uses `phi` here.
 6. Block labels (add a numeric suffix to keep unique): `entry if.then if.else if.end while.cond while.body while.end for.cond for.body for.inc for.end`. `break` → loop end; `continue` → cond (while) or inc (for).
 7. `++/--`: load, `add nsw i32 %x, 1` (or `sub`), store; the expression value is the new value (prefix) or old value (postfix). Compound assignment: load, op, store.
-8. Calls: `call i32 @f(i32 %0, …)` (or `call void`). Functions without a body are `declare`d. Globals are emitted as `@g = global i32 <init or 0>` and referenced with `ptr @g`.
+8. Calls: `call i32 @f(i32 %0, …)` (or `call void`). Functions without a body are `declare`d — including the language's own `malloc`, `free`, `delete`, `print` and `printf`, which are appended only when the program uses them. Globals are emitted as `@g = global i32 <init or 0>` (arrays and records add `cells` and a per-cell `inits` list) and referenced with `ptr @g`.
 9. **Provenance:** set `astNodeId` on every instruction to the most specific AST node it was generated for (the `add` → its `BinaryOperator`; loads → the `DeclRefExpr`; allocas → `VarDecl`/`ParamDecl`; branches → the `IfStmt`/loop node). Compiler scaffolding with no honest origin (e.g. the synthetic `ret i32 0`) gets no `astNodeId`.
 10. `irprint.ts` is a pure function `IRModule → IRLine[]` with `instrId`/`blockId` per line; it never mutates the module.
 11. IR is only generated if there are **no errors** (warnings are fine). Otherwise `ir: null`.
+12. **Addresses, not syntax:** `&x`, `+e` and a decay of an array/record name produce no instruction — they only produce the operand that *denotes* an address. `a[i]`, `p.f` and `*p` on an aggregate become `ptradd <base>, <cells>` (constant offsets are folded into the operand, larger strides become a `mul`); `p - q` becomes `ptrdiff`. `*p` on a scalar still loads.
+13. **Aggregates:** an array or record is one `alloca` carrying `cells` and a `shape` such as `[5 x i32]`; each element or field is written with a `store` to its computed address, so a member at offset 0 still gets a `ptradd` of 0 and unions share offset 0.
+14. **Builtins:** `malloc(n)` is `call ptr @malloc(i32 …)` (with `sizeof` folded into the size), `free`/`delete` are `call i32 @free/i32 @delete`, and `print`/`printf` are `call`s whose format operand is `{ kind: 'string', value: … }`. `new T` becomes a `malloc` of one object's cells, `new T[n]` of `n × cells`.
 
 ### 6.5 Shared integer helper (`int32.ts`)
 Create it now even though only IR uses it lightly: `wrap32(x) = x | 0`, `mul32 = Math.imul`, truncating division. It is reserved for constant folding and the simulator later; both must import it so they can never disagree.
@@ -342,7 +388,7 @@ Blocked stages show: "Not available — *<Stage>* reported errors, so the compil
 
 **Assembly view (`AssemblyView`):** badge `illustrative`. Row-based read-only view of lowered x86-64 assembly in Intel syntax. Row click → `asm` selection. Highlights the 1:1 corresponding IR instruction and source range. Includes function breakdown and "Copy Assembly" button.
 
-**Execution view (`ExecView`):** badge `simulated`. Interactive virtual machine stepping through the generated IR. Controls: Step Forward, Step Back, Run, Pause, and Reset. Visualizes the call stack (call frames, slot counts, released frames), 4-byte stack slot allocations, data segment (globals), program output, and return value. Safety bounds: maximum 5,000 steps and 100 call frames.
+**Execution view (`ExecView`):** badge `simulated`. Interactive virtual machine stepping through the generated IR. Controls: Step Forward, Step Back, Run, Pause, and Reset. Visualizes the call stack (call frames, slot counts, released frames), 4-byte stack slot allocations, the data segment (globals, including whole arrays), heap blocks with their address range and a *released* marker once freed, everything `print`/`printf` has written at that step, and the return value. Safety bounds: maximum 5,000 steps, 100 call frames and 1,000,000 cells of memory. Runtime faults (null dereference, use-after-free, double free, out-of-bounds index, invalid or unrelated pointer, division/modulo by zero, use-after-return) end the run with an error and the failing instruction selected.
 
 **Shell polish:** Resizable editor and workspace split panes (`ResizablePanes`), global theme switcher (`ThemeToggle` supporting light, dark, sepia, and system), and bottom status bar (`StatusBar`).
 
@@ -366,9 +412,9 @@ interface Example { id: string; title: string; category: 'learn' | 'error'; obje
   /** Passes that must visibly change this program when run on their own. */
   demonstrates?: OptPassId[] }
 ```
-Learning examples (all valid Mini-C, each focused on one idea): variables and arithmetic; operator precedence (`2 + 3 * 4`); if/else; while loop (sum 1..n); for loop; function with parameters and a call; recursion (factorial); short-circuit `&&`/`||`; local value forwarding; constant folding; branch folding; common subexpression elimination; dead-code elimination; an all-four-passes optimisation tour; globals read and written across a call; scopes and shadowing; `break`/`continue` in a `while` loop.
-Error examples: missing semicolon (`E2001`), undeclared identifier (`E3001`), wrong argument count (`E3004`), unused variable/missing return warning (`W4001`/`W4002`), unsupported character (`E1010`, the lexer fails and every later stage is blocked), reserved keyword (`E1010`, the parser refuses it), redeclaration in the same scope (`E3002`).
-An example listing `demonstrates` must suggest the Optimization stage, and a test runs each listed pass **in isolation** on that example and fails if it produces no transformation — an example can never advertise a pass it does not actually show.
+Learning examples (22, all valid Mini-C — each must compile with **zero** diagnostics — each focused on one idea): variables and arithmetic; operator precedence (`2 + 3 * 4`); if/else; while loop (sum 1..n); for loop; function with parameters and a call; recursion (factorial); short-circuit `&&`/`||`; local value forwarding; constant folding; branch folding; common subexpression elimination; dead-code elimination; an all-four-passes optimisation tour; globals read and written across a call; scopes and shadowing; `break`/`continue` in a `while` loop; arrays and element access; two-dimensional arrays; pointers, addresses and `malloc`; structs, unions and `->`; recursion with `printf` (the whole `code.c` program).
+Error examples (9): missing semicolon (`E2001`), undeclared identifier (`E3001`), wrong argument count (`E3004`), unused variable/missing return warning (`W4001`/`W4002`), unsupported character (`E1010`, the lexer fails and every later stage is blocked), reserved keyword (`E1010`, the parser refuses it), redeclaration in the same scope (`E3002`), a field the record does not declare (`E3005`), passing a record by value (`E1010`).
+A test pins the counts (31 = 22 learning + 9 error) and the ids. An example listing `demonstrates` must suggest the Optimization stage, and a test runs each listed pass **in isolation** on that example and fails if it produces no transformation — an example can never advertise a pass it does not actually show. The whole set is also run through **every** combination of the four passes under the interpreter, which must give an identical outcome, identical globals, identical output and no extra steps.
 Loading an example shows a small guidance card above the editor (objective, "Try this: open <stage>", explanation) and enables **Reset to example**.
 
 ## 11. Milestones (do in order; stop after each and report)
@@ -382,7 +428,7 @@ Loading an example shows a small guidance card above the editor (objective, "Try
 | 5 | IR generation + printer + IR view + selected-instruction explanations | IR golden snapshot tests pass for all learning examples; every block has exactly one terminator; IR ↔ AST ↔ source highlighting works or shows `unavailable` |
 | 6 | Hardening: explanation content for every kind/opcode/code, error boundaries, limits, full example set (section 10), README (supported subset, limits, honesty model, how to run) | All tests pass; no UI text claims "Clang output"/"real LLVM IR"; every example compiles with its `expected` status |
 | 7 | Assembly generation (`lib/compiler/asmgen.ts`, `components/stages/AssemblyView.tsx`): naive x86-64 Intel syntax lowering with exact `irInstrId` mapping | `asmgen.test.ts` passes; assembly stage active with 1:1 IR line highlights |
-| 8 | Execution VM simulator (`lib/compiler/simulate.ts`, `components/stages/ExecView.tsx`): trace-first interpreter with stepping, frames, memory, globals + UX enhancements (resizable panes, themes, scope tree canvas) | `simulate.test.ts` passes; interactive step forward/back and live frame inspection; all 151 Vitest tests pass |
+| 8 | Execution VM simulator (`lib/compiler/simulate.ts`, `components/stages/ExecView.tsx`): trace-first interpreter with stepping, frames, memory, globals + UX enhancements (resizable panes, themes, scope tree canvas) | `simulate.test.ts` passes; interactive step forward/back and live frame inspection; the full Vitest suite passes |
 | 9 | Optimization stage (`lib/compiler/optimize/*`, `components/stages/OptView.tsx`, `content/optExplanations.ts`): four of this app's own passes over a cloned IR module (local value forwarding, constant/branch folding, block-local CSE, dead-code elimination), diff by instruction **ID**, pass toggles, per-pass timeline, written legend, four-part per-change explanations, `{kind:'opt'}` selection mapped by ID/range, original/optimised switch for assembly and execution | `optimize.test.ts` and `optimize-equivalence.test.ts` pass (identical interpreter results for every pass subset); `highlight.test.ts` covers the `opt` selection; `npm test`, `npm run lint` and `npm run build` all pass |
 
 ### Tests (Vitest, engine-level, no browser)
@@ -406,9 +452,10 @@ Status of previously deferred items:
 - ✅ **Execution simulator (Completed in Milestone 8):** Trace-first interpreter over the unoptimised IR (`lib/compiler/simulate.ts`, `components/stages/ExecView.tsx`) with reversible stepping, call frame stacks, memory/globals visualization, and safety limits (5,000 steps / 100 depth).
 - ✅ **UI polish & themes (Completed in Milestone 8):** Resizable panes (`components/shell/ResizablePanes.tsx`), multiple themes (dark, light, sepia, system via `components/shell/ThemeToggle.tsx`), status bar, and scope tree canvas.
 - ✅ **Optimisation before/after (Completed in Milestone 9):** Four pure passes over a cloned IR module — local value forwarding, constant folding (+ branch folding), block-local CSE, dead-code elimination — diffed by instruction **ID** (removed / changed / replaced / unchanged / added) in `components/stages/OptView.tsx`, with pass toggles, a per-pass timeline, a written legend and a four-part explanation per change; badged as this app's own passes, not LLVM's. `tests/compiler/optimize-equivalence.test.ts` checks optimised vs unoptimised IR give identical results under the interpreter.
+- ✅ **Full Mini-C feature set (Completed):** arrays (including two-dimensional), pointers with address-of/dereference/arithmetic, `struct`/`union` records with `.` and `->`, `malloc`/`free`/`new`/`delete`, `sizeof`, string literals and `print`/`printf`, all carried through every stage — lexer, parser, sema, IR (`ptradd`/`ptrdiff`, multi-cell `alloca`, string operands), interpreter (cell-addressed memory with guard cells, heap table, output panel, runtime checks for null dereference, use-after-free, double free, out-of-bounds, unrelated pointer subtraction, division by zero, use-after-return and safety limits), x86-64 lowering (`lea`/scaled `sub`, `.rodata` string pooling, chunked `.long` rows), and optimiser safety (aggregate and pointer traffic is never forwarded, folded, sunk or removed across it). Feature tests live in `tests/compiler/features.test.ts`.
 
 Remaining deferred items:
 1. **CFG Explorer** — derive from IR: one node per `IRBlock`, edges from each `br` (`true`/`false` edges with different line styles and the condition name). Reuse `GraphCanvas`. Add selection kind `irblock`.
 2. **Simplified AST view** (derived, labelled as an educational view), focus-subtree, minimap, auto-switch to Outline for very large trees.
 3. **Example library UI** (topics/difficulty), **Visual Error Explorer** as dedicated screens.
-4. **Language growth:** `char`/`printf`/string literals, `do-while`, then arrays and pointers (types already allow extension).
+4. **Language growth:** `char`/text as a value, `do-while`, `switch`, the ternary and comma operators, bitwise and shift operators, floating point, casts, storage-class and qualifier keywords (`const`/`static`/`extern`/`unsigned`), `typedef`/`enum`, hexadecimal literals, variable-length and empty array sizes (`sizeof(int[3])`, `int a[]`, `int f(int a[][3])`), records passed or returned by value, function pointers, varargs, and non-literal global initialisers. Each is caught by the stage that owns it — `E1010` where the construct is known but unsupported, a syntax error where the grammar has no production for it — always with an explanation naming what *is* supported, and never silently mis-compiled. The single exception is octal notation: a leading zero is not treated as octal, so `010` reads as the decimal ten.

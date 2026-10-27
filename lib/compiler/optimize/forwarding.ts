@@ -1,8 +1,10 @@
 import type { IRModule, IROperand } from '../types';
 import type { OptChange, OptChangeFacts } from './types';
 import {
+  callMayEscape,
   dropInstructions,
   findUses,
+  isDirectPointer,
   isGlobalKey,
   ptrKey,
   rewriteUses,
@@ -26,11 +28,23 @@ interface CachedLoad {
  * - `store %v, %p` … `load %p` → the load's uses read `%v` directly;
  * - `%a = load %p` … `%b = load %p` → `%b`'s uses read `%a` directly.
  *
- * Every write to that cell — and every call, which may write a global — drops
- * the remembered value, and the knowledge never leaves the block it was
- * recorded in. That is what makes the pass safe: the instruction it deletes is
- * replaced by something that provably holds the same value at every use, and
- * only when every use sits in the same block (so the kept value dominates it).
+ * Pointers make that knowledge fragile, so it is written down only where it is
+ * provably safe:
+ *
+ * - only **direct** targets — an `alloca` or a `@global` — are recorded. Those
+ *   blocks are disjoint from one another, so remembering `%a` says nothing
+ *   wrong about `%b`;
+ * - a store through a *computed* pointer (`ptradd`, a loaded address) forgets
+ *   **everything**, because that address may be any cell the frame can reach;
+ * - a store through a direct pointer forgets every computed key (which might
+ *   alias it) and keeps the other direct ones;
+ * - a call forgets globals, and forgets locals too as soon as any argument is
+ *   a pointer — the callee could then write back through it;
+ *
+ * Knowledge never leaves the block it was recorded in, which is what makes the
+ * pass safe: the instruction it deletes is replaced by something that provably
+ * holds the same value at every use, and only when every use sits in the same
+ * block (so the kept value dominates it).
  *
  * Loads nobody reads are left for dead-code elimination instead.
  */
@@ -50,6 +64,20 @@ export function runForwarding(module: IRModule): PendingChange[] {
       const lastLoad = new Map<string, CachedLoad>();
       const removed = new Set<number>();
 
+      /** Forget every remembered cell the predicate selects. */
+      const forget = (predicate: (key: string) => boolean): void => {
+        for (const key of [...lastStore.keys()]) {
+          if (predicate(key)) lastStore.delete(key);
+        }
+        for (const key of [...lastLoad.keys()]) {
+          if (predicate(key)) lastLoad.delete(key);
+        }
+      };
+
+      /** A key naming an `alloca` or a `@global`: a block nobody else can reach. */
+      const isDirectKey = (key: string): boolean =>
+        isGlobalKey(key) || isDirectPointer(module, { kind: 'value', name: key.slice(2) });
+
       for (const instrId of block.instrIds) {
         const instr = module.instrs[instrId];
         if (instr === undefined) continue;
@@ -57,21 +85,32 @@ export function runForwarding(module: IRModule): PendingChange[] {
         if (instr.opcode === 'store') {
           const ptr = instr.operands[1];
           const stored = instr.operands[0];
-          const key = ptr === undefined ? null : ptrKey(ptr);
-          if (key !== null && stored !== undefined) {
-            lastStore.set(key, stored);
-            lastLoad.delete(key); // the cached register may now be stale
+          if (ptr === undefined || stored === undefined) continue;
+
+          if (!isDirectPointer(module, ptr)) {
+            // A computed address may alias anything, including cells we are
+            // already remembering: drop all of it.
+            forget(() => true);
+            continue;
           }
+          const key = ptrKey(ptr);
+          if (key === null) continue;
+          // Other direct blocks are disjoint, so they survive; computed
+          // pointers might have been pointing here, so they do not.
+          forget((other) => !isDirectKey(other));
+          lastStore.set(key, stored);
+          lastLoad.delete(key); // the cached register may now be stale
           continue;
         }
 
         if (instr.opcode === 'call') {
-          // A callee may store to any global; it cannot reach our allocas.
-          for (const key of [...lastStore.keys()]) {
-            if (isGlobalKey(key)) lastStore.delete(key);
-          }
-          for (const key of [...lastLoad.keys()]) {
-            if (isGlobalKey(key)) lastLoad.delete(key);
+          if (callMayEscape(module, fn, instr)) {
+            // The callee got an address out of this frame: assume it wrote
+            // through it, so nothing we remember about a cell survives.
+            forget(() => true);
+          } else {
+            // With no pointer leaving the frame it can only have touched globals.
+            forget(isGlobalKey);
           }
           continue;
         }

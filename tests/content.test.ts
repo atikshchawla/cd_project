@@ -15,6 +15,8 @@ const ALL_AST_KINDS: AstKind[] = [
   'FunctionDecl',
   'ParamDecl',
   'VarDecl',
+  'RecordDecl',
+  'FieldDecl',
   'CompoundStmt',
   'DeclStmt',
   'ExprStmt',
@@ -25,12 +27,20 @@ const ALL_AST_KINDS: AstKind[] = [
   'BreakStmt',
   'ContinueStmt',
   'NullStmt',
+  'PrintStmt',
+  'DeleteStmt',
   'BinaryOperator',
   'UnaryOperator',
   'CompoundAssignOperator',
   'CallExpr',
   'DeclRefExpr',
   'IntegerLiteral',
+  'StringLiteral',
+  'ArraySubscriptExpr',
+  'MemberExpr',
+  'InitListExpr',
+  'SizeOfExpr',
+  'NewExpr',
   'ParenExpr',
 ];
 
@@ -45,6 +55,8 @@ const ALL_IR_OPCODES: IROpcode[] = [
   'srem',
   'icmp',
   'zext',
+  'ptradd',
+  'ptrdiff',
   'br',
   'ret',
   'call',
@@ -54,6 +66,7 @@ const ALL_IR_OPCODES: IROpcode[] = [
 const ALL_DIAGNOSTIC_CODES = [
   'E1001',
   'E1002',
+  'E1003',
   'E1004',
   'E1010',
   'E2001',
@@ -62,6 +75,7 @@ const ALL_DIAGNOSTIC_CODES = [
   'E3002',
   'E3003',
   'E3004',
+  'E3005',
   'E3006',
   'E3009',
   'W4001',
@@ -70,11 +84,11 @@ const ALL_DIAGNOSTIC_CODES = [
 ];
 
 describe('example set', () => {
-  it('has twenty-four examples (17 learning + 7 error) with unique ids', () => {
-    expect(EXAMPLES).toHaveLength(24);
+  it('has thirty-one examples (22 learning + 9 error) with unique ids', () => {
+    expect(EXAMPLES).toHaveLength(31);
     expect(new Set(EXAMPLES.map((example) => example.id)).size).toBe(EXAMPLES.length);
-    expect(EXAMPLES.filter((example) => example.category === 'learn')).toHaveLength(17);
-    expect(EXAMPLES.filter((example) => example.category === 'error')).toHaveLength(7);
+    expect(EXAMPLES.filter((example) => example.category === 'learn')).toHaveLength(22);
+    expect(EXAMPLES.filter((example) => example.category === 'error')).toHaveLength(9);
   });
 
   it('has well-formed metadata on every example', () => {

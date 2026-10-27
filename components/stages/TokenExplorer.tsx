@@ -7,6 +7,7 @@ import {
   FileCode,
   Hash,
   KeyRound,
+  Quote,
   Tag,
   type LucideIcon,
 } from 'lucide-react';
@@ -41,6 +42,7 @@ const KIND_ICONS: Record<TokenKind, LucideIcon> = {
   keyword: KeyRound,
   identifier: Tag,
   'integer-literal': Hash,
+  'string-literal': Quote,
   operator: Calculator,
   punctuator: Brackets,
   directive: FileCode,
