@@ -86,6 +86,10 @@ export function ResizablePanes({ left, right }: ResizablePanesProps) {
     return clamp(pct, Math.max(MIN_PCT, minPct), Math.min(MAX_PCT, maxPct));
   };
 
+  // Both panes are `relative` so an absolutely positioned descendant inside one
+  // (a `.sr-only` label, a canvas overlay) is anchored — and clipped — by that
+  // pane rather than escaping its `overflow` box to the document. See the
+  // AppShell doc comment for why the chain needs a positioned ancestor.
   return (
     <div
       ref={containerRef}
@@ -95,7 +99,7 @@ export function ResizablePanes({ left, right }: ResizablePanesProps) {
       )}
     >
       <div
-        className="min-w-0 lg:h-full lg:min-h-0 lg:overflow-hidden lg:basis-[var(--split)] lg:shrink-0"
+        className="relative min-w-0 lg:h-full lg:min-h-0 lg:overflow-hidden lg:basis-[var(--split)] lg:shrink-0"
         style={{ '--split': `${split}%` } as CSSProperties}
       >
         {left}

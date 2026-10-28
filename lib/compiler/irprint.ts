@@ -1,4 +1,4 @@
-import type { IRInstr, IRLine, IROperand, IRModule } from './types';
+import type { IRGlobal, IRInstr, IRLine, IROperand, IRModule } from './types';
 
 /** Render one operand as the IR printer prints it (`%x`, `5`, `%label`, `@g`). */
 export function renderOperand(module: IRModule, operand: IROperand): string {
@@ -27,16 +27,19 @@ function escapeForIR(text: string): string {
     .replace(/\0/g, '\\0');
 }
 
-function typedOperandText(module: IRModule, operand: IROperand, type: string): string {
-  return operand.kind === 'const'
-    ? `${operand.type} ${operand.value}`
-    : `${type} ${renderOperand(module, operand)}`;
-}
-
 /**
  * Render a single instruction exactly as `printIR` would (without the
  * two-space indent). Pure and derived from the structured instruction — it
  * never inspects or parses text.
+ *
+ * The printed form is deliberately lean (§6.4 rule 10): a type is written only
+ * where it *declares* something the line cannot otherwise show — the signature
+ * of `define`/`declare`, the slot an `alloca` reserves, the target of a `zext`.
+ * Everything else already implies its type (a load's type is its result's, a
+ * store's is the value being written, arithmetic is always `i32`), so repeating
+ * it would only bury the operands. Attributes that hold no information here are
+ * left out too: every slot is one 4-byte-aligned cell, and arithmetic wraps at
+ * 32 bits, so `align 4` and `nsw` would be noise — `nsw` would be a lie.
  */
 export function renderInstr(module: IRModule, instr: IRInstr): string {
   const result = instr.result !== undefined ? `${instr.result} = ` : '';
@@ -44,43 +47,36 @@ export function renderInstr(module: IRModule, instr: IRInstr): string {
 
   switch (instr.opcode) {
     case 'alloca':
-      // A multi-cell alloca prints its shape: `alloca [5 x i32], align 4`.
-      return `${result}alloca ${instr.shape ?? instr.type}, align 4`;
+      // A multi-cell alloca prints its shape: `alloca [5 x i32]`.
+      return `${result}alloca ${instr.shape ?? instr.type}`;
     case 'load':
-      return `${result}load ${instr.type}, ${typedOperandText(module, instr.operands[0], 'ptr')}, align 4`;
-    case 'store': {
-      const [stored, ptr] = instr.operands;
-      return `store ${typedOperandText(module, stored, instr.type)}, ${typedOperandText(module, ptr, 'ptr')}, align 4`;
-    }
+      return `${result}load ${ops[0]}`;
+    case 'store':
+      return `store ${ops[0]}, ${ops[1]}`;
     case 'add':
     case 'sub':
     case 'mul':
-      return `${result}${instr.opcode} nsw ${instr.type} ${ops[0]}, ${ops[1]}`;
     case 'sdiv':
     case 'srem':
-      return `${result}${instr.opcode} ${instr.type} ${ops[0]}, ${ops[1]}`;
+      return `${result}${instr.opcode} ${ops[0]}, ${ops[1]}`;
     case 'ptradd':
       // Our dialect's simplified `getelementptr`: one cell per element.
-      return `${result}ptradd ${typedOperandText(module, instr.operands[0], 'ptr')}, ${typedOperandText(module, instr.operands[1], 'i32')}`;
+      return `${result}ptradd ${ops[0]}, ${ops[1]}`;
     case 'ptrdiff':
-      return `${result}ptrdiff ${typedOperandText(module, instr.operands[0], 'ptr')}, ${typedOperandText(module, instr.operands[1], 'ptr')}`;
+      return `${result}ptrdiff ${ops[0]}, ${ops[1]}`;
     case 'icmp':
-      return `${result}icmp ${instr.predicate ?? 'ne'} i32 ${ops[0]}, ${ops[1]}`;
+      return `${result}icmp ${instr.predicate ?? 'ne'} ${ops[0]}, ${ops[1]}`;
     case 'zext':
-      return `${result}zext i1 ${ops[0]} to ${instr.toType ?? 'i32'}`;
+      return `${result}zext ${ops[0]} to ${instr.toType ?? 'i32'}`;
     case 'br':
       if (instr.operands.length === 1) return `br label ${ops[0]}`;
-      return `br i1 ${ops[0]}, label ${ops[1]}, label ${ops[2]}`;
+      return `br ${ops[0]}, label ${ops[1]}, label ${ops[2]}`;
     case 'ret':
       if (instr.operands.length === 0) return `ret void`;
-      return `ret ${instr.type} ${ops[0]}`;
+      return `ret ${ops[0]}`;
     case 'call': {
-      const args = instr.operands
-        .map((operand, index) =>
-          typedOperandText(module, operand, callArgType(module, instr, operand, index)),
-        )
-        .join(', ');
-      const call = `call ${instr.type} @${instr.callee ?? ''}(${args})`;
+      const args = ops.join(', ');
+      const call = `call @${instr.callee ?? ''}(${args})`;
       return instr.result !== undefined ? `${result}${call}` : call;
     }
     case 'unreachable':
@@ -89,35 +85,13 @@ export function renderInstr(module: IRModule, instr: IRInstr): string {
 }
 
 /**
- * The printed type of one call argument.
- *
- * String literals are `ptr`, declared callees give the parameter types, and the
- * four built-ins (`malloc`, `free`, `delete`, `printf`/`print`) are known by
- * name — everything else falls back to `i32`, which is what every remaining
- * value in this dialect is.
- */
-function callArgType(
-  module: IRModule,
-  instr: IRInstr,
-  operand: IROperand,
-  index: number,
-): string {
-  if (operand.kind === 'string' || operand.kind === 'global') return 'ptr';
-  const callee = module.functions.find((fn) => fn.name === instr.callee);
-  if (callee !== undefined && index < callee.params.length) return callee.params[index].type;
-  if (instr.callee === 'free' || instr.callee === 'delete') return 'ptr';
-  return 'i32';
-}
-
-/** Import the shapes used by the printer only. */
-import type { IRGlobal } from './types';
-
-/**
  * The right-hand side of a global definition.
  *
- * Scalars print exactly as before (`i32 0`); arrays and records print their
- * shape and either `zeroinitializer` or the cell list. Very long lists are
- * elided with `...` — this listing is never assembled or parsed back.
+ * Scalars keep their type (`i32 0`), because that is the declaration. Arrays
+ * and records print their shape and either `zeroinitializer` or the bare cell
+ * list — the shape already says `x i32`, so repeating it per cell would only
+ * bury the numbers. Very long lists are elided with `...`; this listing is
+ * never assembled or parsed back.
  */
 function globalText(global: IRGlobal): string {
   const cells = global.cells ?? 1;
@@ -125,7 +99,7 @@ function globalText(global: IRGlobal): string {
   const inits = global.inits;
   const values = inits ?? [];
   if (!values.some((value) => value !== 0)) return `[${cells} x i32] zeroinitializer`;
-  const shown = values.slice(0, 64).map((value) => `i32 ${value}`);
+  const shown = values.slice(0, 64).map((value) => String(value));
   if (values.length > 64) shown.push('...');
   return `[${cells} x i32] [${shown.join(', ')}]`;
 }

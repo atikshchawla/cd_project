@@ -4,9 +4,13 @@
  *
  * Pure text work — the colouring never feeds a mapping or a comparison; every
  * ID in the UI comes from the structured IR.
+ *
+ * Only words that can actually be printed are listed: the printer never emits
+ * `nsw` or `align` (§6.4 rule 10), so they are not coloured. `i1` still is —
+ * `icmp` results carry it, and `zext ... to i32` shows where it goes.
  */
 export const IR_TOKEN_PATTERN =
-  /((?:^|\s)(?:define|declare|global|alloca|load|store|add|sub|mul|sdiv|srem|icmp|zext|br|ret|call|unreachable|nsw|align|phi)(?=\s))|(%[\w.]+)|(@[\w]+)|\b(i1|i32|ptr|void)\b|\b(label|to|global)\b|\b(\d+)\b/g;
+  /((?:^|\s)(?:define|declare|global|alloca|load|store|add|sub|mul|sdiv|srem|icmp|zext|br|ret|call|unreachable|phi)(?=\s))|(%[\w.]+)|(@[\w]+)|\b(i1|i32|ptr|void)\b|\b(label|to|global)\b|\b(\d+)\b/g;
 
 const TOKEN_CLASSES: Record<number, string> = {
   1: 'font-semibold text-violet-700', // opcode words

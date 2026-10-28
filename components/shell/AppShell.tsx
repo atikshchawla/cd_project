@@ -22,6 +22,17 @@ import { sourceTooLarge } from '@/lib/status';
  * stepper (56px) + two resizable panes + footer status bar (24px).
  * At ≥1024px the page itself never scrolls — each pane scrolls internally.
  * Below 1024px the panes stack and the page scrolls normally.
+ *
+ * Every scroll container here is `relative`, and so is the shell itself — not
+ * for layout, but for containment. An absolutely positioned descendant (such as
+ * Tailwind's `.sr-only` spans) is only clipped by an ancestor's
+ * `overflow: hidden` when that ancestor sits at or below its containing block;
+ * with no positioned ancestor in the chain its containing block is the initial
+ * one, so a 1×1 hidden span placed deep inside a tall stage card escapes the
+ * clip and stretches the document's scrollable area — the whole page becomes
+ * scrollable on exactly the stages whose card outgrows the viewport (the
+ * optimisation stage). A `relative` ancestor re-anchors those children, so the
+ * nearest `overflow` box clips them and they scroll with their own content.
  */
 export function AppShell() {
   const compileSource = useWorkspaceStore((state) => state.compileSource);
@@ -37,7 +48,7 @@ export function AppShell() {
 
   return (
     <TooltipProvider>
-      <div className="flex min-h-dvh flex-col bg-background lg:h-dvh lg:min-h-0 lg:overflow-hidden">
+      <div className="relative flex min-h-dvh flex-col bg-background lg:h-dvh lg:min-h-0 lg:overflow-hidden">
         <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
           <h1 className="mr-1 shrink-0 text-sm font-semibold leading-none">
             Mini-C Compiler Visualizer
@@ -115,16 +126,16 @@ export function AppShell() {
         <main className="min-h-0 flex-1">
           <ResizablePanes
             left={
-              <div className="h-full min-h-0 overflow-y-auto p-3">
+              <div className="relative h-full min-h-0 overflow-y-auto p-3">
                 <EditorPanel />
               </div>
             }
             right={
               <div className="flex h-full min-h-0 flex-col gap-3 p-3">
-                <div className="min-h-0 flex-1 overflow-y-auto">
+                <div className="relative min-h-0 flex-1 overflow-y-auto">
                   <StageWorkspace />
                 </div>
-                <div className="max-h-[45%] shrink-0 overflow-y-auto">
+                <div className="relative max-h-[45%] shrink-0 overflow-y-auto">
                   <ExplanationPanel />
                 </div>
               </div>

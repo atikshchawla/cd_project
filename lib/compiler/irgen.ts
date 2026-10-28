@@ -211,7 +211,7 @@ export function generateIR(ast: Ast): IRModule {
     emit({ opcode: 'ret', type, operands: operand === null ? [] : [operand], astNodeId });
   };
 
-  /** Rule 4: int -> i1 for branches via `icmp ne i32 %v, 0`; i1 passes through. */
+  /** Rule 4: int -> i1 for branches via `icmp ne %v, 0`; i1 passes through. */
   const toCondition = (operand: IROperand, type: IRType, astNodeId: number): IROperand => {
     if (type === I1) return operand;
     const instr = emit({
@@ -749,7 +749,7 @@ export function generateIR(ast: Ast): IRModule {
     const operandOperand = widenToI32(operand.operand, operand.type, operandId);
 
     if (op === 'prefix-') {
-      // Rule 4: unary minus -> `sub nsw i32 0, %x`.
+      // Rule 4: unary minus -> `sub 0, %x`.
       const instr = emit({
         opcode: 'sub',
         type: I32,
@@ -760,7 +760,7 @@ export function generateIR(ast: Ast): IRModule {
       return { operand: value(instr.result!), type: I32 };
     }
 
-    // Rule 4: `!x` -> `icmp eq i32 %x, 0` (callers widen to i32 when needed).
+    // Rule 4: `!x` -> `icmp eq %x, 0` (callers widen to i32 when needed).
     const cmp = emit({
       opcode: 'icmp',
       type: I1,

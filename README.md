@@ -139,9 +139,13 @@ and asserts the optimised and unoptimised IR produce identical interpreter resul
 
 - The compiler is an original educational implementation under `lib/compiler`. Nothing here is
   Clang, LLVM, WebAssembly, or a wrapper around them.
-- IR output is **LLVM-style**: it uses LLVM-like syntax (`alloca`, `load`, `store`, `add nsw`,
+- IR output is **LLVM-style**: it uses LLVM-like syntax (`alloca`, `load`, `store`, `add`,
   `icmp`/`zext`, `br`, `ret`, `call`) so it reads like real IR, but it is produced by this app's
-  own generator and printer. It is not guaranteed to assemble with a real LLVM toolchain.
+  own generator and printer. It is not guaranteed to assemble with a real LLVM toolchain. The
+  printed form is trimmed for readability (SPEC §6.4 rule 10): a type is written only where it
+  declares something the line cannot otherwise show — a signature, an `alloca`'s slot, a `zext`
+  target — and since every slot is a single 4-byte-aligned cell with wrapping 32-bit arithmetic,
+  `align 4` and `nsw` are left out entirely (`nsw` would be false).
 - Provenance badges mark every artifact: *generated* (derived from your source), *derived* (from
   another artifact), *illustrative* (extra teaching content), or *simulated* (derived from VM execution).
 - The assembly stage lowers the selected IR version (original or optimised) to naive x86-64
@@ -193,6 +197,6 @@ All 8 pipeline stages and interactive features are complete:
 - Naive x86-64 assembly generation with 1:1 IR line mappings and Intel syntax (original or
   optimised IR)
 - Browser-based execution simulator (VM) with reversible stepping, call frame inspection, stack/memory visualization, and output capture (original or optimised IR)
-- 241 unit and snapshot tests covering the entire pipeline, including a feature suite for arrays,
+- 244 unit and snapshot tests covering the entire pipeline, including a feature suite for arrays,
   pointers, records, `print`/`printf` and the runtime checks, plus an optimizer-equivalence suite
   that runs every example through all 16 pass combinations

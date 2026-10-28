@@ -32,6 +32,7 @@ import {
   IR_PREDICATE_EXPLANATIONS,
   IR_PREDICATE_LABEL,
   IR_RESULT_LABEL,
+  IR_TYPE_LABEL,
   IR_VAR_LABEL,
   IROPCODE_EXPLANATIONS,
 } from '@/content/explanations';
@@ -85,6 +86,14 @@ function InstructionPanel({ instrId }: { instrId: number }) {
         {instr.result !== undefined ? (
           <span className="font-mono text-xs text-muted-foreground">
             {IR_RESULT_LABEL}: <code className="text-foreground">{instr.result}</code>
+          </span>
+        ) : null}
+        {/* The printed line leaves out types it does not declare (§6.4 rule 10),
+            so the panel keeps the one that describes the value. `alloca` and
+            `zext` already print theirs inline. */}
+        {instr.opcode !== 'alloca' && instr.opcode !== 'zext' && instr.type !== 'void' ? (
+          <span className="font-mono text-xs text-muted-foreground">
+            {IR_TYPE_LABEL}: <code className="text-foreground">{instr.type}</code>
           </span>
         ) : null}
         {instr.predicate !== undefined ? (

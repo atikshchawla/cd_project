@@ -67,7 +67,7 @@ describe('IR generation', () => {
     expect(firstTwo.map((instr) => instr.result)).toEqual(['%a.addr', '%b.addr']);
   });
 
-  it('uses nsw add for `+` and hint names like %add', () => {
+  it('prints `+` as a bare add with a hint name like %add', () => {
     const irModule = moduleOf(compileOk('int main() { int x = 1 + 2; return x; }'));
     const add = Object.values(irModule.instrs).find((instr) => instr.opcode === 'add' && instr.result === '%add');
     expect(add).toBeDefined();
@@ -78,7 +78,9 @@ describe('IR generation', () => {
     const line = compileOk('int main() { int x = 1 + 2; return x; }').ir!.lines.find(
       (candidate) => candidate.instrId === add!.id,
     )!;
-    expect(line.text).toBe('  %add = add nsw i32 1, 2');
+    // The type is implied (arithmetic is always i32) and `nsw` would be a lie,
+    // so neither is printed (§6.4 rule 10).
+    expect(line.text).toBe('  %add = add 1, 2');
   });
 
   it('models comparisons as i1 and widens with zext when used as int', () => {
@@ -91,7 +93,7 @@ describe('IR generation', () => {
     const zext = Object.values(irModule.instrs).find((instr) => instr.opcode === 'zext')!;
     expect(zext.toType).toBe('i32');
     const line = result.ir!.lines.find((candidate) => candidate.instrId === zext.id)!;
-    expect(line.text).toMatch(/^ {2}%\d+ = zext i1 %cmp to i32$/);
+    expect(line.text).toMatch(/^ {2}%\d+ = zext %cmp to i32$/);
   });
 
   it('builds && and || without phi, using hidden temps and rhs/end blocks', () => {
@@ -188,7 +190,7 @@ describe('IR generation', () => {
     expect(globalRef.map((instr) => instr.opcode).sort()).toEqual(['load', 'load', 'store']);
   });
 
-  it('generates calls with the callee name and typed arguments', () => {
+  it('generates calls with the callee name and argument operands', () => {
     const result = compileOk('int add(int a, int b) { return a + b; } int main() { return add(2, 3); }');
     const irModule = moduleOf(result);
     const call = Object.values(irModule.instrs).find((instr) => instr.opcode === 'call')!;
@@ -199,7 +201,39 @@ describe('IR generation', () => {
       { kind: 'const', value: 3, type: 'i32' },
     ]);
     const line = result.ir!.lines.find((candidate) => candidate.instrId === call.id)!;
-    expect(line.text).toBe('  %call = call i32 @add(i32 2, i32 3)');
+    // The callee's types live on its define line, so the call itself is bare.
+    expect(line.text).toBe('  %call = call @add(2, 3)');
+  });
+
+  it('prints a type only where it declares something, and never align or nsw', () => {
+    const source = [
+      'int g = 3;',
+      'int a[4] = {1, 2, 3, 4};',
+      'int main() {',
+      '  int x = 1 + 2;',
+      '  if (x > 2) { x = x - 1; }',
+      '  printf("%d\\n", x);',
+      '  return g + a[1];',
+      '}',
+    ].join('\n');
+    const text = compileOk(source)
+      .ir!.lines.map((line) => line.text)
+      .join('\n');
+
+    // Declared: signatures, slots, the global's own type and shape.
+    expect(text).toContain('define i32 @main()');
+    expect(text).toContain('declare i32 @printf(ptr, i32)');
+    expect(text).toContain('%x = alloca i32');
+    expect(text).toContain('@g = global i32 3');
+    expect(text).toContain('[4 x i32] [1, 2, 3, 4]');
+
+    // Implied or false: never printed (§6.4 rule 10).
+    expect(text).not.toMatch(/\b(align|nsw)\b/);
+    expect(text).not.toContain('store i32');
+    expect(text).not.toContain('= load i32');
+    expect(text).not.toMatch(/= add i32/);
+    expect(text).not.toMatch(/call i32 @/);
+    expect(text).not.toContain('ret i32 ');
   });
 
   it('records astNodeId provenance on every non-scaffolding instruction', () => {

@@ -274,14 +274,14 @@ Generate from the **annotated AST**. Style: unoptimised Clang-like output (local
 ```llvm
 define i32 @add(i32 %a, i32 %b) {
 entry:
-  %a.addr = alloca i32, align 4
-  %b.addr = alloca i32, align 4
-  store i32 %a, ptr %a.addr, align 4
-  store i32 %b, ptr %b.addr, align 4
-  %0 = load i32, ptr %a.addr, align 4
-  %1 = load i32, ptr %b.addr, align 4
-  %add = add nsw i32 %0, %1
-  ret i32 %add
+  %a.addr = alloca i32
+  %b.addr = alloca i32
+  store %a, %a.addr
+  store %b, %b.addr
+  %0 = load %a.addr
+  %1 = load %b.addr
+  %add = add %0, %1
+  ret %add
 }
 ```
 
@@ -289,17 +289,17 @@ Rules (they prevent invalid IR):
 1. **Builder invariant:** every block ends in exactly one terminator. If code is emitted into an already-terminated block (e.g. after `return`), start a new block first. At function end, if the open block is unterminated: `ret void` (void fn), `ret i32 0` (`main`), else `unreachable`. Finally **prune blocks with no predecessors** (except `entry`).
 2. Allocas for params and locals go in `entry` (collect while generating, insert at top). Param `x` → `%x.addr`; local `x` → `%x` (numeric suffix when shadowed). Set `varName` on each alloca.
 3. Value names: hint names (`%add`, `%cmp`, `%call`, `%inc`) plus numeric temps (`%0`, `%1`…) with a per-function counter; names are unique per function and **never renumbered**.
-4. Conditions: `int → i1` via `icmp ne i32 %v, 0`. Comparison results are `i1`; when used as an `int`, `zext i1 … to i32`. `!x` → `icmp eq i32 %x, 0` + `zext`. Unary minus → `sub nsw i32 0, %x`.
+4. Conditions: `int → i1` via `icmp ne %v, 0`. Comparison results are `i1`; when used as an `int`, `zext … to i32`. `!x` → `icmp eq %x, 0` + `zext`. Unary minus → `sub 0, %x`.
 5. `&&` / `||` without `phi`: use a hidden `i32` temp alloca (`%land.tmp` / `%lor.tmp`), blocks `land.rhs`/`land.end` (`lor.rhs`/`lor.end`), store 0/1 on the paths and `load` it in the end block. The explanation text notes real Clang uses `phi` here.
 6. Block labels (add a numeric suffix to keep unique): `entry if.then if.else if.end while.cond while.body while.end for.cond for.body for.inc for.end`. `break` → loop end; `continue` → cond (while) or inc (for).
-7. `++/--`: load, `add nsw i32 %x, 1` (or `sub`), store; the expression value is the new value (prefix) or old value (postfix). Compound assignment: load, op, store.
-8. Calls: `call i32 @f(i32 %0, …)` (or `call void`). Functions without a body are `declare`d — including the language's own `malloc`, `free`, `delete`, `print` and `printf`, which are appended only when the program uses them. Globals are emitted as `@g = global i32 <init or 0>` (arrays and records add `cells` and a per-cell `inits` list) and referenced with `ptr @g`.
+7. `++/--`: load, `add %x, 1` (or `sub`), store; the expression value is the new value (prefix) or old value (postfix). Compound assignment: load, op, store.
+8. Calls print `call @f(%0, …)` — with a `%x = ` result only when the callee returns a value, since the types are written once on the `define`/`declare` line. Functions without a body are `declare`d — including the language's own `malloc`, `free`, `delete`, `print` and `printf`, which are appended only when the program uses them. Globals are emitted as `@g = global i32 <init or 0>` (arrays and records add `cells` and a per-cell `inits` list, printed bare as `[n x i32] [0, 7, …]`) and referenced with `ptr @g`.
 9. **Provenance:** set `astNodeId` on every instruction to the most specific AST node it was generated for (the `add` → its `BinaryOperator`; loads → the `DeclRefExpr`; allocas → `VarDecl`/`ParamDecl`; branches → the `IfStmt`/loop node). Compiler scaffolding with no honest origin (e.g. the synthetic `ret i32 0`) gets no `astNodeId`.
-10. `irprint.ts` is a pure function `IRModule → IRLine[]` with `instrId`/`blockId` per line; it never mutates the module.
+10. `irprint.ts` is a pure function `IRModule → IRLine[]` with `instrId`/`blockId` per line; it never mutates the module. **Printed form — write only what carries information:** a type appears where it *declares* something the line cannot otherwise show (`define`/`declare` signatures, `alloca` slots, `zext … to i32`, `global` declarations) and is omitted where the line already implies it (a load's type is its result's, a store's is the value it writes, arithmetic is always `i32`). No `align` and no `nsw` are ever printed: every slot is one cell of an already-aligned stack and every operation wraps at 32 bits, so `align 4` would repeat a constant and `nsw` would be a lie. Strings stay quoted with their escapes re-escaped (`"sum=%d\n"`).
 11. IR is only generated if there are **no errors** (warnings are fine). Otherwise `ir: null`.
 12. **Addresses, not syntax:** `&x`, `+e` and a decay of an array/record name produce no instruction — they only produce the operand that *denotes* an address. `a[i]`, `p.f` and `*p` on an aggregate become `ptradd <base>, <cells>` (constant offsets are folded into the operand, larger strides become a `mul`); `p - q` becomes `ptrdiff`. `*p` on a scalar still loads.
 13. **Aggregates:** an array or record is one `alloca` carrying `cells` and a `shape` such as `[5 x i32]`; each element or field is written with a `store` to its computed address, so a member at offset 0 still gets a `ptradd` of 0 and unions share offset 0.
-14. **Builtins:** `malloc(n)` is `call ptr @malloc(i32 …)` (with `sizeof` folded into the size), `free`/`delete` are `call i32 @free/i32 @delete`, and `print`/`printf` are `call`s whose format operand is `{ kind: 'string', value: … }`. `new T` becomes a `malloc` of one object's cells, `new T[n]` of `n × cells`.
+14. **Builtins:** `malloc(n)` is `call @malloc(…)` (with `sizeof` folded into the size), `free`/`delete` are `call @free(…)` / `call @delete(…)`, and `print`/`printf` are `call`s whose format operand is `{ kind: 'string', value: … }`. `new T` becomes a `malloc` of one object's cells, `new T[n]` of `n × cells`.
 
 ### 6.5 Shared integer helper (`int32.ts`)
 Create it now even though only IR uses it lightly: `wrap32(x) = x | 0`, `mul32 = Math.imul`, truncating division. It is reserved for constant folding and the simulator later; both must import it so they can never disagree.
@@ -384,7 +384,7 @@ Blocked stages show: "Not available — *<Stage>* reported errors, so the compil
 
 **Semantic view:** (a) **Symbol table**: name, kind, type, declared at, use count; row click → `symbol` selection. (b) **Scope tree canvas (`ScopeTreeCanvas`)**: visual React Flow diagram of nested lexical scopes (global, function, block) and their declared symbols. (c) **Diagnostics list** (shared `DiagnosticList`): severity icon + text, code, stage, `line:col`, expandable raw message/notes, a short "Why this error?" from `content/explanations.ts`; click → `diagnostic` selection. Selected expression nodes show their computed type in the explanation panel.
 
-**IR view:** badge `generated`. Row-based read-only view (custom list of `<button>` rows from `IRLine[]`, **not** Monaco) with line numbers and regex syntax colouring (opcodes, `%names`, `@globals`, types, labels, numbers). Row click → `ir` selection. Function selector if several functions. "Copy IR" button. Static note: "LLVM IR is an intermediate language: not C and not machine code. Real LLVM IR for the same program can differ (metadata, attributes, `phi` nodes)." Selected-instruction panel: opcode meaning, operands (built from the `IRInstr`, not parsed from text), result name, and the source mapping or the `unavailable` reason.
+**IR view:** badge `generated`. Row-based read-only view (custom list of `<button>` rows from `IRLine[]`, **not** Monaco) with line numbers and regex syntax colouring (opcodes, `%names`, `@globals`, types, labels, numbers). Row click → `ir` selection. Function selector if several functions. "Copy IR" button. Static note: "LLVM IR is an intermediate language: not C and not machine code. Real LLVM IR for the same program can differ (metadata, attributes, `phi` nodes)." Selected-instruction panel: opcode meaning, the value's type (printed lines leave out types they do not declare, so the panel is where they stay visible), operands (built from the `IRInstr`, not parsed from text), result name, and the source mapping or the `unavailable` reason.
 
 **Assembly view (`AssemblyView`):** badge `illustrative`. Row-based read-only view of lowered x86-64 assembly in Intel syntax. Row click → `asm` selection. Highlights the 1:1 corresponding IR instruction and source range. Includes function breakdown and "Copy Assembly" button.
 

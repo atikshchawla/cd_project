@@ -103,7 +103,7 @@ int main() {
     // The whole array is one multi-cell slot, and every element address is a
     // ptradd (constant offsets fold into the operand).
     expect(text).toContain('alloca [5 x i32]');
-    expect(text).toContain('ptradd ptr %a, i32 4');
+    expect(text).toContain('ptradd %a, 4');
     expect(run(`
 int main() {
   int a[5] = {1, 2, 3, 4, 5};
@@ -505,8 +505,8 @@ int main() {
 
   it('keeps print/printf as typed calls with a string operand in the IR', () => {
     const { text, module } = irOf('int main() { print(1); printf("%d\\n", 2); return 0; }');
-    expect(text).toContain('call i32 @print(i32 1)');
-    expect(text).toContain('call i32 @printf(ptr "%d\\n", i32 2)');
+    expect(text).toContain('call @print(1)');
+    expect(text).toContain('call @printf("%d\\n", 2)');
     expect(module.functions.find((fn) => fn.name === 'printf')?.isDeclaration).toBe(true);
     expect(module.functions.find((fn) => fn.name === 'print')?.isDeclaration).toBe(true);
   });

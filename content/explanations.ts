@@ -471,6 +471,8 @@ export const IR_EMPTY_SELECTION =
 export const IR_INSTRUCTION_TITLE = 'Selected instruction';
 export const IR_OPERANDS_LABEL = 'Operands';
 export const IR_RESULT_LABEL = 'Result';
+/** Shown in the instruction panel: printed lines omit types they do not declare. */
+export const IR_TYPE_LABEL = 'Type';
 export const IR_PREDICATE_LABEL = 'Comparison';
 export const IR_CALLEE_LABEL = 'Callee';
 export const IR_VAR_LABEL = 'Source variable';
@@ -499,15 +501,15 @@ export const IROPCODE_EXPLANATIONS: Record<IROpcode, IROpcodeExplanation> = {
   },
   add: {
     label: 'add',
-    simple: 'Integer addition. "nsw" means no signed overflow is allowed (a promise, like C).',
+    simple: 'Integer addition. The result wraps at 32 bits, exactly as a C `int` does.',
   },
   sub: {
     label: 'sub',
-    simple: 'Integer subtraction, also with the "nsw" overflow promise.',
+    simple: 'Integer subtraction with the same 32-bit wrapping as C — it is also how unary minus is written: `sub 0, %x`.',
   },
   mul: {
     label: 'mul',
-    simple: 'Integer multiplication, also with the "nsw" overflow promise.',
+    simple: 'Integer multiplication. Like C, only the low 32 bits of the result are kept.',
   },
   sdiv: {
     label: 'sdiv',
@@ -530,7 +532,7 @@ export const IROPCODE_EXPLANATIONS: Record<IROpcode, IROpcodeExplanation> = {
   br: {
     label: 'br',
     simple:
-      'Branches. With one label it always jumps there; with an i1 condition it picks between two labels.',
+      'Branches. With one label it always jumps there; with a condition first it picks between the two labels.',
   },
   ret: {
     label: 'ret',
@@ -549,7 +551,7 @@ export const IROPCODE_EXPLANATIONS: Record<IROpcode, IROpcodeExplanation> = {
   call: {
     label: 'call',
     simple:
-      'Calls a function with typed arguments and receives its return value. malloc, free, delete, print and printf are built in.',
+      'Calls a function and receives its return value. The types are written once, on the define/declare line that names it. malloc, free, delete, print and printf are built in.',
   },
   unreachable: {
     label: 'unreachable',
